@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#10131c">
+  <title>3D Pong Adventure</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 14px 9px; background: radial-gradient(ellipse at center,#202942,#0b0e16 75%); color: #eef2ff; font-family: system-ui,sans-serif; }
+    main { width: min(800px,96vw); text-align: center; }
+    h1 { margin: 0 0 10px; letter-spacing: .12em; text-shadow: 0 0 18px #42e8ff88; }
+    .info,.controls,.row { display: flex; align-items: center; justify-content: center; gap: 9px; flex-wrap: wrap; }
+    .info { justify-content: space-between; margin: 0 4px 10px; color: #c5d3ec; font-size: .9rem; font-weight: 600; }
+    canvas { display: block; width: 100%; height: auto; border: 2px solid #45d9ff; border-radius: 8px; background: #101b2c; box-shadow: 0 24px 45px #0009,0 0 24px #31d9ff55; touch-action: none; }
+    .controls { margin-top: 12px; }
+    select,button { border: 0; border-radius: 6px; padding: 9px 11px; font: inherit; }
+    select { background: #202942; color: #eef2ff; border: 1px solid #45d9ff; }
+    button { background: #45d9ff; color: #07121e; font-weight: 700; cursor: pointer; }
+    button:hover { background: #8cecff; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    input[type=range] { width: min(140px,32vw); accent-color: #45d9ff; }
+    .panel { margin: 10px auto 0; padding: 10px; border: 1px solid #344d6a; border-radius: 8px; background: #101827dd; }
+    .panel[hidden] { display:none; }
+    .shop { margin-top: 10px; }
+    .shop button { margin: 3px; font-size: .85rem; }
+    .hint { margin: 8px 0 0; color: #aeb8d0; font-size: .86rem; }
+    @media(max-width:520px) { body { padding: 9px 5px; } .info { font-size:.72rem; } .controls { gap:6px; } select,button { padding:8px; font-size:.84rem; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>3D PONG</h1>
+  <div class="info"><span id="modeLabel">Adventure</span><span id="roundLabel">Ready</span><span id="scoreLabel">First to 5</span></div>
+  <canvas id="game" width="800" height="500" aria-label="Pong game"></canvas>
+  <div class="controls">
+    <label for="mode">Mode</label>
+    <select id="mode"><option value="adventure">Adventure</option><option value="boss">Boss Battle</option><option value="trophy">Trophy Tournament</option><option value="powerup">Power-Up</option></select>
+    <span id="mapControl"><label for="map">Map</label> <select id="map"><option value="0">Neon City</option><option value="1">Ice Cavern</option><option value="2">Lava Rift</option><option value="3">Cosmic Core</option></select></span>
+    <label for="speed">Speed</label><input id="speed" type="range" min="0.5" max="2" step="0.1" value="1"><span id="speedValue">1.0×</span>
+    <button id="startButton">Start adventure</button><button id="pauseButton" hidden>Ⅱ Pause</button><button id="settingsButton" aria-expanded="false">⚙ Settings</button>
+  </div>
+  <section id="settingsPanel" class="panel" hidden>
+    <div class="row"><label for="musicStyle">Background music</label><select id="musicStyle"><option value="arcade">Arcade melody</option><option value="calm">Calm melody</option><option value="off">Off</option></select>
+      <label for="musicVolume">Music volume</label><input id="musicVolume" type="range" min="0" max="0.08" step="0.005" value="0.018"><button id="sfxButton">Sound effects: On</button></div>
+  </section>
+  <p class="hint">Drag on the court or use ↑ / ↓. Boss mode: the large paddle follows the ball. Press Esc to pause.</p>
+  <section class="panel shop"><strong>🪙 Coins: <span id="coinCount">0</span> · Paddle shop</strong><div id="shopItems" class="row"></div><p class="hint">Wins earn coins. Cleared Adventure maps unlock the next map on this device.</p></section>
+  <section id="pausePanel" class="panel" hidden><strong>Game paused</strong><div class="row" style="margin-top:8px"><button id="resumeButton">Resume</button><button id="restartButton">Restart match</button></div></section>
+</main>
+<script>
+(() => {
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const canvas=$('game'),ctx=canvas.getContext('2d'),modeSelect=$('mode'),mapSelect=$('map');
+  const W=canvas.width,H=canvas.height,PW=13,BASE_H=90,BR=9,MAPS=[
+    {name:'Neon City',top:'#102d48',bottom:'#090f26',glow:'#32dcff',obstacle:'#4af3ff',shapes:[[.5,.34,21],[.5,.66,21]],motion:0},
+    {name:'Ice Cavern',top:'#19445d',bottom:'#0d2038',glow:'#9aeaff',obstacle:'#b5f5ff',shapes:[[.5,.5,34]],motion:0},
+    {name:'Lava Rift',top:'#51232a',bottom:'#1e101b',glow:'#ff7047',obstacle:'#ff9d39',shapes:[[.5,.3,24],[.5,.7,24]],motion:1},
+    {name:'Cosmic Core',top:'#301653',bottom:'#100e2d',glow:'#c27bff',obstacle:'#e1a1ff',shapes:[[.4,.5,23],[.6,.5,23]],motion:2}
+  ],SKINS=[{id:'cyan',name:'Neon Cyan',color:'#32dcff',cost:0},{id:'gold',name:'Golden',color:'#ffd35a',cost:30},{id:'rose',name:'Rose',color:'#ff69c7',cost:50},{id:'lime',name:'Lime',color:'#63ff9c',cost:75}],POWERUPS=[{type:'grow',label:'GROW',color:'#63ff9c'},{type:'shrink',label:'SHRINK',color:'#ff647c'},{type:'slow',label:'SLOW',color:'#ffd35a'}];
+  const SAVE_KEY='simplePongAdventureSaveV7';
+  function readSave(){try{const d=JSON.parse(localStorage.getItem(SAVE_KEY)||'{}');return{coins:Math.max(0,Number(d.coins)||0),unlocked:Math.min(3,Math.max(0,Number(d.unlocked)||0)),owned:Array.isArray(d.owned)?[...new Set(['cyan',...d.owned.filter(id=>SKINS.some(s=>s.id===id))])]:['cyan'],equipped:SKINS.some(s=>s.id===d.equipped)?d.equipped:'cyan'};}catch{return{coins:0,unlocked:0,owned:['cyan'],equipped:'cyan'};}}
+  let save=readSave();function persist(){try{localStorage.setItem(SAVE_KEY,JSON.stringify(save));}catch{}}
+  let mode=modeSelect.value,selectedMap=0,speed=1,level=0,active=false,paused=false,matchOver=true,finish='ready',serveTimer=0,powerTimer=0,pickup=null,elapsed=0,lastTime=0,title='PONG ADVENTURE',subtitle='Choose a map and start',rewarded=false;
+  let audioCtx=null,sfxOn=true,musicStyle='arcade',musicVolume=.018,musicTimer=0,musicStep=0;
+  const keys=new Set();function makePaddle(x){return{x,y:(H-BASE_H)/2,h:BASE_H,effects:{grow:0,shrink:0,slow:0},score:0};}
+  const player=makePaddle(28),cpu=makePaddle(W-41),ball={x:W/2,y:H/2,vx:0,vy:0,lastHitter:'player'};
+  function mapIndex(){return mode==='adventure'?(level>0?(selectedMap+level-1)%MAPS.length:selectedMap):0;}
+  function mapNow(){return MAPS[mapIndex()]||MAPS[0];}
+  function skinNow(){return SKINS.find(s=>s.id===save.equipped)||SKINS[0];}
+  function modeName(){return({adventure:'Adventure',boss:'Boss Battle',trophy:'Trophy Tournament',powerup:'Power-Up Mode'})[mode]||'Adventure';}
+  function audio(){if(!audioCtx){const AC=window.AudioContext||window.webkitAudioContext;if(AC)audioCtx=new AC();}if(audioCtx?.state==='suspended')audioCtx.resume();return audioCtx;}
+  function beep(freq,duration=.08,type='sine',volume=.04,force=false){if(!sfxOn&&!force)return;const ac=audio();if(!ac)return;const o=ac.createOscillator(),g=ac.createGain();o.type=type;o.frequency.setValueAtTime(freq,ac.currentTime);g.gain.setValueAtTime(Math.max(.0001,volume),ac.currentTime);g.gain.exponentialRampToValueAtTime(.0001,ac.currentTime+duration);o.connect(g);g.connect(ac.destination);o.start();o.stop(ac.currentTime+duration);}
+  function musicNotes(){return musicStyle==='calm'?[220,261.63,329.63,261.63,196,246.94,293.66,246.94]:[261.63,329.63,392,329.63,293.66,349.23,440,349.23];}
+  function startMusic(){if(musicTimer||musicStyle==='off'||paused)return;musicTimer=window.setInterval(()=>{if(!document.hidden&&!paused&&musicStyle!=='off'){const notes=musicNotes();beep(notes[musicStep++%notes.length],.22,'triangle',musicVolume,true);}},330);}
+  function stopMusic(){if(musicTimer){clearInterval(musicTimer);musicTimer=0;}}
+  function renderShop(){ $('coinCount').textContent=save.coins;$('shopItems').replaceChildren();for(const s of SKINS){const b=document.createElement('button'),owned=save.owned.includes(s.id),equipped=save.equipped===s.id;b.textContent=equipped?'✓ '+s.name:owned?'Equip '+s.name:`${s.name} · ${s.cost}🪙`;b.style.border=`1px solid ${s.color}`;b.disabled=equipped||(!owned&&save.coins<s.cost);b.onclick=()=>{audio();if(!save.owned.includes(s.id)){if(save.coins<s.cost)return;save.coins-=s.cost;save.owned.push(s.id);}save.equipped=s.id;persist();renderShop();beep(660);};$('shopItems').append(b);}for(const o of mapSelect.options)o.disabled=Number(o.value)>save.unlocked;if(selectedMap>save.unlocked){selectedMap=save.unlocked;mapSelect.value=String(selectedMap);}}
+  function clearEffects(p){p.effects.grow=p.effects.shrink=p.effects.slow=0;p.h=BASE_H;}
+  function clamp(p){p.y=Math.max(0,Math.min(H-p.h,p.y));}
+  function setHeight(p,h){const mid=p.y+p.h/2;p.h=h;p.y=mid-h/2;clamp(p);}
+  function resetBall(dir){ball.x=W/2;ball.y=H/2;ball.vx=300*speed*dir;ball.vy=(Math.random()*200-100)*speed;ball.lastHitter=dir>0?'player':'cpu';serveTimer=.65;pickup=null;powerTimer=2.5;}
+  function updateLabels(){ $('modeLabel').textContent=modeName();$('roundLabel').textContent=mode==='adventure'?`Map ${mapIndex()+1}/${MAPS.length}: ${mapNow().name}`:mode==='trophy'?`Round ${level}/3`:mode==='boss'?'Boss Battle':'Power-Up match';$('scoreLabel').textContent=mode==='boss'?`Boss HP ${Math.max(0,9-player.score)} · Player ${Math.max(0,5-cpu.score)}`:mode==='powerup'?'First to 7':'First to 5';}
+  function ready(){active=false;paused=false;matchOver=true;finish='ready';level=0;rewarded=false;player.score=cpu.score=0;clearEffects(player);clearEffects(cpu);cpu.h=mode==='boss'?148:BASE_H;cpu.y=(H-cpu.h)/2;player.y=(H-BASE_H)/2;pickup=null;title=mode==='adventure'?'PONG ADVENTURE':mode==='boss'?'BOSS BATTLE':modeName().toUpperCase();subtitle=mode==='adventure'?`${mapNow().name} · clear maps to unlock more`:mode==='boss'?'The boss paddle tracks the ball—first to 9 wins!':'Press Start to play';$('pausePanel').hidden=true;$('pauseButton').hidden=true;$('startButton').textContent=mode==='adventure'?'Start adventure':mode==='boss'?'Challenge boss':'Start game';updateLabels();draw();}
+  function begin(){audio();startMusic();active=true;paused=false;matchOver=false;finish='';level=1;rewarded=false;player.score=cpu.score=0;clearEffects(player);clearEffects(cpu);player.y=(H-BASE_H)/2;cpu.h=mode==='boss'?148:BASE_H;cpu.y=(H-cpu.h)/2;$('pauseButton').hidden=false;$('pauseButton').textContent='Ⅱ Pause';$('pausePanel').hidden=true;title=subtitle='';updateLabels();resetBall(Math.random()<.5?-1:1);}
+  function startLevel(n){level=n;player.score=cpu.score=0;clearEffects(player);clearEffects(cpu);player.y=(H-BASE_H)/2;cpu.h=BASE_H;cpu.y=(H-BASE_H)/2;active=true;paused=false;matchOver=false;finish='';rewarded=false;$('pauseButton').hidden=false;$('pausePanel').hidden=true;title=subtitle='';updateLabels();resetBall(Math.random()<.5?-1:1);}
+  function togglePause(force){if(!active||matchOver)return;paused=typeof force==='boolean'?force:!paused;$('pausePanel').hidden=!paused;$('pauseButton').textContent=paused?'▶ Resume':'Ⅱ Pause';if(paused)stopMusic();else{audio();startMusic();lastTime=performance.now();}}
+  function earnCoins(n){if(rewarded)return;rewarded=true;save.coins+=n;persist();renderShop();}
+  function endMatch(){matchOver=true;stopMusic();ball.vx=ball.vy=0;pickup=null;$('pauseButton').hidden=true;const target=mode==='powerup'?7:mode==='boss'?9:5,won=player.score>=target;
+    if(!won){finish='lost';title=mode==='boss'?'BOSS WINS':mode==='adventure'?'MAP FAILED':'MATCH OVER';subtitle='Try again—you can do it!';beep(145,.35,'sawtooth');}
+    else if(mode==='adventure'){const cleared=mapIndex();if(cleared<MAPS.length-1)save.unlocked=Math.max(save.unlocked,cleared+1);persist();earnCoins(20+cleared*10);if(cleared===MAPS.length-1){finish='adventureWin';title='ADVENTURE COMPLETE!';subtitle='All maps conquered! Coins earned.';}else{finish='advance';title=`${MAPS[cleared].name} cleared!`;subtitle=`${MAPS[cleared+1].name} unlocked!`;}}
+    else if(mode==='trophy'){earnCoins(15+level*5);if(level>=3){finish='champion';title='🏆 TOURNAMENT WON!';subtitle='You are the champion!';}else{finish='advance';title=`ROUND ${level} WON!`;subtitle='Get ready for the next round.';}}
+    else if(mode==='boss'){finish='bossWin';earnCoins(50);title='BOSS DEFEATED!';subtitle='50 coins earned!';}
+    else{finish='powerWin';earnCoins(10);title='POWER-UP CHAMPION!';subtitle='10 coins earned!';}
+    if(won)beep(660,.25,'triangle');$('roundLabel').textContent=won?'Victory!':'Match lost';$('startButton').textContent=finish==='advance'?(mode==='adventure'?'Next map':'Next round'):'Play again';}
+  function scorePoint(forPlayer){if(forPlayer)player.score++;else cpu.score++;beep(forPlayer?580:180,.15,forPlayer?'triangle':'sawtooth');updateLabels();const target=mode==='powerup'?7:mode==='boss'?(forPlayer?9:5):5;if(player.score>=target||cpu.score>=target)endMatch();else resetBall(forPlayer?-1:1);}
+  function obstacles(t){const m=mapNow();return m.shapes.map(([x,y,r],i)=>({x:x*W,y:y*H+(m.motion===1?Math.sin(t*1.6+i*Math.PI)*28:m.motion===2?Math.sin(t*1.2+i*Math.PI)*18:0),r}));}
+  function circleHit(o){const dx=ball.x-o.x,dy=ball.y-o.y,d=Math.hypot(dx,dy),min=BR+o.r;if(d>=min||d===0)return;const nx=dx/d,ny=dy/d,dot=ball.vx*nx+ball.vy*ny;if(dot<0){ball.vx-=2*dot*nx;ball.vy-=2*dot*ny;beep(230,.04,'sine',.018);}ball.x=o.x+nx*(min+1);ball.y=o.y+ny*(min+1);}
+  function paddleHit(p){return ball.x+BR>p.x&&ball.x-BR<p.x+PW&&ball.y+BR>p.y&&ball.y-BR<p.y+p.h;}
+  function moveComputer(dt){
+    // Boss height is fixed for the whole round. Do not animate/reset it in the frame loop:
+    // that previously interfered with the CPU paddle's center and made it appear stationary.
+    if(mode==='boss')cpu.h=148;else if(cpu.effects.grow>0)cpu.h=130;else if(cpu.effects.shrink>0)cpu.h=58;else cpu.h=BASE_H;
+    const center=cpu.y+cpu.h/2;
+    let target=ball.y;
+    // During a serve, ease back toward court center; while in play, track the live ball.
+    if(serveTimer>0)target=H/2;
+    const base=mode==='boss'?390:mode==='trophy'?280+level*65:mode==='adventure'?260+mapIndex()*42:310;
+    const multiplier=mode==='boss'?1:cpu.effects.slow>0?.48:1;
+    const maxMove=base*speed*multiplier*dt;
+    const delta=Math.max(-maxMove,Math.min(maxMove,target-center));
+    cpu.y+=delta;
+    clamp(cpu);
+  }
+  function update(dt){elapsed+=dt;if(!active||matchOver||paused)return;
+    for(const p of [player,cpu]){for(const k of Object.keys(p.effects))p.effects[k]=Math.max(0,p.effects[k]-dt);}
+    if(mode!=='boss'){const h=player.effects.grow>0?130:player.effects.shrink>0?58:BASE_H;if(h!==player.h)setHeight(player,h);}else player.h=BASE_H;
+    if(keys.has('ArrowUp'))player.y-=430*dt;if(keys.has('ArrowDown'))player.y+=430*dt;clamp(player);
+    // This runs on every active frame, including the serve countdown, so the boss visibly follows the ball.
+    moveComputer(dt);
+    if(serveTimer>0){serveTimer=Math.max(0,serveTimer-dt);return;}
+    ball.x+=ball.vx*dt;ball.y+=ball.vy*dt;
+    if(ball.y-BR<0){ball.y=BR;ball.vy=Math.abs(ball.vy);beep(300,.035,'sine',.014);}else if(ball.y+BR>H){ball.y=H-BR;ball.vy=-Math.abs(ball.vy);beep(300,.035,'sine',.014);}
+    if(mode==='adventure')for(const o of obstacles(elapsed))circleHit(o);
+    for(const p of [player,cpu]){const toward=p===player?ball.vx<0:ball.vx>0;if(toward&&paddleHit(p)){const offset=Math.max(-1,Math.min(1,(ball.y-(p.y+p.h/2))/(p.h/2))),dir=p===player?1:-1,v=Math.min(Math.hypot(ball.vx,ball.vy)*1.045,720*speed);ball.vx=dir*v*Math.cos(offset*.9);ball.vy=v*Math.sin(offset*.9);ball.x=p===player?p.x+PW+BR:p.x-BR;ball.lastHitter=p===player?'player':'cpu';beep(p===player?500:250,.06,'square',.025);}}
+    if(mode==='powerup'){powerTimer-=dt;if(!pickup&&powerTimer<=0){const item=POWERUPS[Math.floor(Math.random()*POWERUPS.length)];pickup={...item,x:W/2+(Math.random()*90-45),y:80+Math.random()*(H-160),r:19};powerTimer=8;}if(pickup&&Math.hypot(ball.x-pickup.x,ball.y-pickup.y)<BR+pickup.r){const owner=ball.lastHitter==='cpu'?cpu:player,opp=owner===player?cpu:player;if(pickup.type==='grow')owner.effects.grow=7;if(pickup.type==='shrink')opp.effects.shrink=7;if(pickup.type==='slow')opp.effects.slow=7;pickup=null;beep(740,.12,'triangle');}}
+    if(ball.x+BR<0)scorePoint(false);else if(ball.x-BR>W)scorePoint(true);
+  }
+  function draw(){const m=mapNow(),g=ctx.createLinearGradient(0,0,0,H);g.addColorStop(0,m.top);g.addColorStop(1,m.bottom);ctx.fillStyle=g;ctx.fillRect(0,0,W,H);ctx.strokeStyle=m.glow+'35';ctx.lineWidth=1;for(let y=70;y<H;y+=65){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}ctx.setLineDash([8,12]);ctx.strokeStyle=m.glow+'aa';ctx.lineWidth=3;ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);
+    if(mode==='adventure')for(const o of obstacles(elapsed)){ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.fillStyle=m.obstacle+'30';ctx.fill();ctx.strokeStyle=m.obstacle;ctx.lineWidth=3;ctx.shadowColor=m.obstacle;ctx.shadowBlur=15;ctx.stroke();ctx.shadowBlur=0;}
+    if(mode==='boss'){ctx.fillStyle='#ff4878';ctx.textAlign='center';ctx.font='bold 17px system-ui';ctx.fillText('BOSS',cpu.x+PW/2,cpu.y-10);ctx.strokeStyle='#ff487866';ctx.lineWidth=5;ctx.strokeRect(cpu.x-5,cpu.y-5,PW+10,cpu.h+10);}
+    ctx.textAlign='center';ctx.font='bold 42px system-ui';ctx.fillStyle='#eefaff';ctx.shadowColor=m.glow;ctx.shadowBlur=12;ctx.fillText(player.score,W/2-60,55);ctx.fillText(cpu.score,W/2+60,55);ctx.shadowBlur=0;
+    if(pickup){ctx.beginPath();ctx.arc(pickup.x,pickup.y,pickup.r,0,Math.PI*2);ctx.fillStyle=pickup.color;ctx.fill();ctx.fillStyle='#101522';ctx.font='bold 9px system-ui';ctx.fillText(pickup.label,pickup.x,pickup.y+3);}
+    ctx.fillStyle=skinNow().color;ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=16;ctx.fillRect(player.x,player.y,PW,player.h);ctx.fillStyle=mode==='boss'?'#ff4878':'#ff69c7';ctx.shadowColor=ctx.fillStyle;ctx.fillRect(cpu.x,cpu.y,PW,cpu.h);ctx.beginPath();ctx.arc(ball.x,ball.y,BR,0,Math.PI*2);ctx.fillStyle='#fff';ctx.shadowColor='#fff';ctx.shadowBlur=20;ctx.fill();ctx.shadowBlur=0;
+    if(matchOver||paused){ctx.fillStyle='#07101dcc';ctx.fillRect(0,0,W,H);ctx.textAlign='center';ctx.fillStyle='#fff';ctx.font='bold 30px system-ui';ctx.fillText(paused?'PAUSED':title,W/2,H/2-12);ctx.fillStyle='#bfefff';ctx.font='18px system-ui';ctx.fillText(paused?'Tap Resume to continue':subtitle,W/2,H/2+24);}}
+  modeSelect.addEventListener('change',()=>{mode=modeSelect.value;$('mapControl').hidden=mode!=='adventure';ready();});
+  mapSelect.addEventListener('change',()=>{selectedMap=Number(mapSelect.value);if(selectedMap>save.unlocked){selectedMap=save.unlocked;mapSelect.value=String(selectedMap);}ready();});
+  $('speed').addEventListener('input',e=>{const n=Number(e.target.value),ratio=n/speed;ball.vx*=ratio;ball.vy*=ratio;speed=n;$('speedValue').textContent=`${speed.toFixed(1)}×`;});
+  $('startButton').addEventListener('click',()=>{audio();if(finish==='advance'&&mode==='trophy')startLevel(level+1);else if(finish==='advance'&&mode==='adventure'){level++;active=true;matchOver=false;paused=false;player.score=cpu.score=0;player.y=(H-BASE_H)/2;cpu.h=BASE_H;cpu.y=(H-BASE_H)/2;rewarded=false;updateLabels();$('pauseButton').hidden=false;title=subtitle='';resetBall(Math.random()<.5?-1:1);}else begin();});
+  $('pauseButton').addEventListener('click',()=>togglePause());$('resumeButton').addEventListener('click',()=>togglePause(false));$('restartButton').addEventListener('click',()=>begin());
+  $('settingsButton').addEventListener('click',()=>{const panel=$('settingsPanel');panel.hidden=!panel.hidden;$('settingsButton').setAttribute('aria-expanded',String(!panel.hidden));if(!panel.hidden)audio();});
+  $('musicStyle').addEventListener('change',e=>{musicStyle=e.target.value;stopMusic();startMusic();});$('musicVolume').addEventListener('input',e=>musicVolume=Number(e.target.value));
+  $('sfxButton').addEventListener('click',()=>{sfxOn=!sfxOn;$('sfxButton').textContent=`Sound effects: ${sfxOn?'On':'Off'}`;if(sfxOn)beep(600);});
+  $('pauseButton').hidden=true;$('settingsPanel').hidden=true;
+  canvas.addEventListener('pointerdown',()=>{audio();startMusic();});canvas.addEventListener('pointermove',e=>{if(e.pointerType==='mouse'&&e.buttons===0)return;const r=canvas.getBoundingClientRect();player.y=(e.clientY-r.top)*H/r.height-player.h/2;clamp(player);});
+  window.addEventListener('keydown',e=>{if(e.key==='Escape'){togglePause();return;}if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();keys.add(e.key);}});window.addEventListener('keyup',e=>keys.delete(e.key));window.addEventListener('blur',()=>keys.clear());document.addEventListener('visibilitychange',()=>{if(document.hidden){stopMusic();if(active&&!matchOver)togglePause(true);}else if(!paused)startMusic();});
+  function frame(t){const dt=Math.min((t-lastTime)/1000||0,.03);lastTime=t;update(dt);draw();requestAnimationFrame(frame);}
+  $('mapControl').hidden=mode!=='adventure';renderShop();ready();requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
