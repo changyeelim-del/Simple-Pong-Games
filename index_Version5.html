@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#10131c">
+  <title>3D Pong Adventure</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      padding: 18px 12px; background: radial-gradient(ellipse at center, #202942, #0b0e16 75%);
+      color: #eef2ff; font-family: system-ui, sans-serif;
+    }
+    main { width: min(800px, 96vw); text-align: center; }
+    h1 { margin: 0 0 12px; letter-spacing: .12em; text-shadow: 0 0 18px #42e8ff88; }
+    .info, .controls { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+    .info { justify-content: space-between; margin: 0 4px 10px; color: #c5d3ec; font-size: .92rem; font-weight: 600; }
+    .court { perspective: 1000px; }
+    canvas {
+      display: block; width: 100%; height: auto; border: 2px solid #45d9ff; border-radius: 8px;
+      background: #101b2c; box-shadow: 0 24px 45px #0009, 0 0 24px #31d9ff55;
+      transform: rotateX(5deg); transform-origin: center bottom; touch-action: none;
+    }
+    .controls { margin-top: 16px; }
+    select, button { border: 0; border-radius: 6px; padding: 10px 12px; font: inherit; }
+    select { background: #202942; color: #eef2ff; border: 1px solid #45d9ff; }
+    button { background: #45d9ff; color: #07121e; font-weight: 700; cursor: pointer; }
+    button:hover { background: #8cecff; }
+    input[type="range"] { width: min(160px, 38vw); accent-color: #45d9ff; }
+    #speedValue { min-width: 40px; color: #45d9ff; }
+    #mapControl[hidden] { display: none; }
+    p, .hint { color: #aeb8d0; }
+    .hint { margin-top: 8px; font-size: .88rem; }
+    @media (max-width: 520px) {
+      body { padding: 12px 8px; }
+      .info { font-size: .78rem; }
+      .controls { gap: 8px; }
+      select, button { padding: 9px; font-size: .9rem; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>3D PONG</h1>
+    <div class="info">
+      <span id="modeLabel">Adventure</span>
+      <span id="roundLabel">Choose a map and start</span>
+      <span id="scoreLabel">First to 5</span>
+    </div>
+    <div class="court"><canvas id="game" width="800" height="500" aria-label="Pong game"></canvas></div>
+    <div class="controls">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="adventure">Adventure</option>
+        <option value="trophy">Trophy Tournament</option>
+        <option value="powerup">Power-Up</option>
+      </select>
+      <span id="mapControl"><label for="map">Starting map</label>
+        <select id="map">
+          <option value="0">Neon City</option><option value="1">Ice Cavern</option>
+          <option value="2">Lava Rift</option><option value="3">Cosmic Core</option>
+        </select>
+      </span>
+      <label for="speed">Speed</label>
+      <input id="speed" type="range" min="0.5" max="2" step="0.1" value="1">
+      <span id="speedValue">1.0×</span>
+      <button id="startButton">Start adventure</button>
+    </div>
+    <p class="hint">Drag on the court or use ↑ / ↓. Beat each map to unlock the next one!</p>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const modeSelect = document.getElementById('mode');
+    const mapSelect = document.getElementById('map');
+    const mapControl = document.getElementById('mapControl');
+    const speedSlider = document.getElementById('speed');
+    const speedValue = document.getElementById('speedValue');
+    const modeLabel = document.getElementById('modeLabel');
+    const roundLabel = document.getElementById('roundLabel');
+    const scoreLabel = document.getElementById('scoreLabel');
+    const startButton = document.getElementById('startButton');
+
+    const W = canvas.width, H = canvas.height;
+    const PADDLE_W = 13, BASE_PADDLE_H = 90, BALL_R = 9;
+    const TOURNAMENT_ROUNDS = 3, ADVENTURE_ROUNDS = 4;
+    const maps = [
+      { name: 'Neon City', top: '#102d48', bottom: '#090f26', glow: '#32dcff', obstacle: '#4af3ff', shapes: [[.5,.34,21],[.5,.66,21]], motion: 0 },
+      { name: 'Ice Cavern', top: '#19445d', bottom: '#0d2038', glow: '#9aeaff', obstacle: '#b5f5ff', shapes: [[.5,.5,34]], motion: 0 },
+      { name: 'Lava Rift', top: '#51232a', bottom: '#1e101b', glow: '#ff7047', obstacle: '#ff9d39', shapes: [[.5,.3,24],[.5,.7,24]], motion: 1 },
+      { name: 'Cosmic Core', top: '#301653', bottom: '#100e2d', glow: '#c27bff', obstacle: '#e1a1ff', shapes: [[.4,.5,23],[.6,.5,23]], motion: 2 }
+    ];
+    const powerups = [
+      { type: 'grow', label: 'GROW', color: '#63ff9c' },
+      { type: 'shrink', label: 'SHRINK', color: '#ff647c' },
+      { type: 'slow', label: 'SLOW', color: '#ffd35a' }
+    ];
+
+    let mode = modeSelect.value, speed = Number(speedSlider.value), selectedMap = 0;
+    let level = 0, active = false, matchOver = true, finish = 'ready';
+    let serveTimer = 0, powerTimer = 2, pickup = null, elapsed = 0, lastTime = 0;
+    let title = 'PONG ADVENTURE', subtitle = 'Choose a map and start your journey';
+    const keys = new Set();
+    const player = makePaddle(28), cpu = makePaddle(W - 41);
+    const ball = { x: W/2, y: H/2, vx: 0, vy: 0, lastHitter: 'player' };
+
+    function makePaddle(x) {
+      return { x, y: (H-BASE_PADDLE_H)/2, h: BASE_PADDLE_H, score: 0,
+        effects: { grow: 0, shrink: 0, slow: 0 } };
+    }
+    function mapIndex() { return mode === 'adventure' ? (selectedMap + level - 1) % maps.length : 0; }
+    function currentMap() { return maps[mapIndex()]; }
+    function clearEffects(p) {
+      p.effects.grow = p.effects.shrink = p.effects.slow = 0;
+      p.h = BASE_PADDLE_H;
+    }
+    function clamp(p) { p.y = Math.max(0, Math.min(H-p.h, p.y)); }
+    function setHeight(p, h) {
+      const center = p.y + p.h/2; p.h = h; p.y = center-h/2; clamp(p);
+    }
+    function resetBall(dir) {
+      ball.x = W/2; ball.y = H/2;
+      ball.vx = 300*speed*dir; ball.vy = (Math.random()*240-120)*speed;
+      ball.lastHitter = dir > 0 ? 'player' : 'cpu';
+      serveTimer = .65; pickup = null; powerTimer = 2.4;
+    }
+    function resetReady() {
+      active = false; matchOver = true; finish = 'ready'; level = 0;
+      player.score = cpu.score = 0; clearEffects(player); clearEffects(cpu); pickup = null;
+      modeLabel.textContent = modeName(); roundLabel.textContent = 'Ready to play';
+      scoreLabel.textContent = mode === 'powerup' ? 'First to 7' : 'First to 5';
+      startButton.textContent = mode === 'adventure' ? 'Start adventure' : 'Start game';
+      title = mode === 'adventure' ? 'PONG ADVENTURE' : modeName().toUpperCase();
+      subtitle = mode === 'adventure' ? 'Choose a map and start your journey' : 'Press Start game to play';
+      draw();
+    }
+    function modeName() { return mode === 'trophy' ? 'Trophy Tournament' : mode === 'powerup' ? 'Power-Up Mode' : 'Adventure'; }
+    function begin() {
+      active = true;
+      if (mode === 'trophy') startLevel(1);
+      else { level = 1; player.score = cpu.score = 0; clearEffects(player); clearEffects(cpu);
+        matchOver = false; finish = ''; updateLabels(); title = subtitle = ''; resetBall(Math.random()<.5?-1:1); }
+    }
+    function startLevel(n) {
+      level = n; player.score = cpu.score = 0; clearEffects(player); clearEffects(cpu);
+      player.y = cpu.y = (H-BASE_PADDLE_H)/2; matchOver = false; finish = ''; title = subtitle = '';
+      updateLabels(); startButton.textContent = mode === 'adventure' ? 'Restart adventure' : 'Restart tournament';
+      resetBall(Math.random()<.5?-1:1);
+    }
+    function updateLabels() {
+      modeLabel.textContent = modeName();
+      if (mode === 'adventure') roundLabel.textContent = `Map ${level} of ${ADVENTURE_ROUNDS}: ${maps[mapIndex()].name}`;
+      else if (mode === 'trophy') roundLabel.textContent = `Round ${level} of ${TOURNAMENT_ROUNDS}`;
+      else roundLabel.textContent = 'Power-Up match';
+      scoreLabel.textContent = `First to ${mode === 'powerup' ? 7 : 5}`;
+    }
+
+    modeSelect.addEventListener('change', () => {
+      mode = modeSelect.value; mapControl.hidden = mode !== 'adventure'; resetReady();
+    });
+    mapSelect.addEventListener('change', () => {
+      selectedMap = Number(mapSelect.value);
+      if (mode === 'adventure') resetReady();
+    });
+    speedSlider.addEventListener('input', () => {
+      const next = Number(speedSlider.value), ratio = next/speed;
+      ball.vx *= ratio; ball.vy *= ratio; speed = next; speedValue.textContent = `${speed.toFixed(1)}×`;
+    });
+    startButton.addEventListener('click', () => {
+      if (!active || finish === 'lost' || finish === 'champion' || finish === 'adventureWin' || finish === 'powerWin') begin();
+      else if (matchOver && finish === 'advance') startLevel(level+1);
+    });
+    canvas.addEventListener('pointermove', e => {
+      const rect = canvas.getBoundingClientRect();
+      player.y = (e.clientY-rect.top)*H/rect.height-player.h/2; clamp(player);
+    });
+    window.addEventListener('keydown', e => {
+      if (e.key === 'ArrowUp' || e.key === 'ArrowDown') { e.preventDefault(); keys.add(e.key); }
+    });
+    window.addEventListener('keyup', e => keys.delete(e.key));
+    window.addEventListener('blur', () => keys.clear());
+
+    function mapObstacles(time) {
+      const map = currentMap();
+      return map.shapes.map(([nx,ny,r], i) => {
+        let y = ny*H;
+        if (map.motion === 1) y += Math.sin(time*1.6+i*Math.PI)*28;
+        if (map.motion === 2) y += Math.sin(time*1.2+i*Math.PI)*18;
+        return { x: nx*W, y, r };
+      });
+    }
+    function collideCircle(o) {
+      const dx = ball.x-o.x, dy = ball.y-o.y, distance = Math.hypot(dx,dy), min = BALL_R+o.r;
+      if (distance >= min || distance === 0) return;
+      const nx = dx/distance, ny = dy/distance;
+      const dot = ball.vx*nx+ball.vy*ny;
+      if (dot < 0) { ball.vx -= 2*dot*nx; ball.vy -= 2*dot*ny; }
+      ball.x = o.x+nx*(min+1); ball.y = o.y+ny*(min+1);
+    }
+    function hitPaddle(p) {
+      return ball.x+BALL_R>p.x && ball.x-BALL_R<p.x+PADDLE_W && ball.y+BALL_R>p.y && ball.y-BALL_R<p.y+p.h;
+    }
+    function spawnPickup() {
+      const item = powerups[Math.floor(Math.random()*powerups.length)];
+      pickup = { ...item, x: W/2+(Math.random()*90-45), y: 80+Math.random()*(H-160), r: 19 };
+    }
+    function collectPickup() {
+      const owner = ball.lastHitter === 'cpu' ? cpu : player;
+      const opponent = ball.lastHitter === 'cpu' ? player : cpu;
+      if (pickup.type === 'grow') owner.effects.grow = 7;
+      if (pickup.type === 'shrink') opponent.effects.shrink = 7;
+      if (pickup.type === 'slow') opponent.effects.slow = 7;
+      pickup = null;
+    }
+    function scorePoint(playerScored) {
+      if (playerScored) player.score++; else cpu.score++;
+      const target = mode === 'powerup' ? 7 : 5;
+      if (player.score >= target || cpu.score >= target) endMatch();
+      else resetBall(playerScored ? -1 : 1);
+    }
+    function endMatch() {
+      matchOver = true; ball.vx = ball.vy = 0; pickup = null;
+      const won = player.score >= (mode === 'powerup' ? 7 : 5);
+      if (!won) { finish = 'lost'; title = mode === 'adventure' ? 'ADVENTURE PAUSED' : 'MATCH OVER'; subtitle = 'Try again to continue your journey'; roundLabel.textContent = 'Match lost'; startButton.textContent = 'Try again'; return; }
+      if (mode === 'adventure') {
+        if (level >= ADVENTURE_ROUNDS) { finish = 'adventureWin'; title = 'ADVENTURE COMPLETE!'; subtitle = 'You conquered every map!'; roundLabel.textContent = 'Champion!'; startButton.textContent = 'Play again'; }
+        else { finish = 'advance'; title = `${maps[mapIndex()].name} cleared!`; subtitle = `Next map: ${maps[(mapIndex()+1)%maps.length].name}`; roundLabel.textContent = 'Map cleared!'; startButton.textContent = 'Next map'; }
+      } else if (mode === 'trophy') {
+        if (level >= TOURNAMENT_ROUNDS) { finish = 'champion'; title = '🏆 TROPHY CHAMPION!'; subtitle = 'You won all three rounds!'; roundLabel.textContent = 'Trophy earned!'; startButton.textContent = 'Play again'; }
+        else { finish = 'advance'; title = `ROUND ${level} WON!`; subtitle = 'Ready for the next opponent?'; roundLabel.textContent = 'Round complete'; startButton.textContent = 'Next round'; }
+      } else { finish = 'powerWin'; title = 'POWER-UP CHAMPION!'; subtitle = 'You won the special match!'; roundLabel.textContent = 'Victory!'; startButton.textContent = 'Play again'; }
+    }
+    function update(dt) {
+      elapsed += dt;
+      if (!active || matchOver) return;
+      for (const p of [player,cpu]) {
+        for (const effect of Object.keys(p.effects)) p.effects[effect] = Math.max(0,p.effects[effect]-dt);
+        const h = p.effects.grow>0 ? 130 : p.effects.shrink>0 ? 58 : BASE_PADDLE_H;
+        if (h !== p.h) setHeight(p,h);
+      }
+      if (keys.has('ArrowUp')) player.y -= 420*dt;
+      if (keys.has('ArrowDown')) player.y += 420*dt;
+      clamp(player);
+      const aiSpeed = (mode === 'trophy' ? 300+level*65 : mode === 'adventure' ? 285+level*50 : 330)*speed*(cpu.effects.slow>0?.48:1);
+      const diff = ball.y-(cpu.y+cpu.h/2);
+      cpu.y += Math.sign(diff)*Math.min(Math.abs(diff),aiSpeed*dt); clamp(cpu);
+      if (serveTimer>0) { serveTimer-=dt; return; }
+      ball.x += ball.vx*dt; ball.y += ball.vy*dt;
+      if (ball.y-BALL_R<=0) { ball.y=BALL_R; ball.vy=Math.abs(ball.vy); }
+      else if (ball.y+BALL_R>=H) { ball.y=H-BALL_R; ball.vy=-Math.abs(ball.vy); }
+      if (mode === 'adventure') for (const obstacle of mapObstacles(elapsed)) collideCircle(obstacle);
+      for (const p of [player,cpu]) {
+        const toward = p===player ? ball.vx<0 : ball.vx>0;
+        if (toward && hitPaddle(p)) {
+          const offset=(ball.y-(p.y+p.h/2))/(p.h/2), dir=p===player?1:-1;
+          const v=Math.min(Math.hypot(ball.vx,ball.vy)*1.045,720*speed);
+          ball.vx=dir*v*Math.cos(offset*.9); ball.vy=v*Math.sin(offset*.9);
+          ball.x=p===player?p.x+PADDLE_W+BALL_R:p.x-BALL_R;
+          ball.lastHitter=p===player?'player':'cpu';
+        }
+      }
+      if (mode==='powerup') {
+        powerTimer-=dt; if (!pickup && powerTimer<=0) { spawnPickup(); powerTimer=8; }
+        if (pickup && Math.hypot(ball.x-pickup.x,ball.y-pickup.y)<BALL_R+pickup.r) collectPickup();
+      }
+      if (ball.x+BALL_R<0) scorePoint(false);
+      else if (ball.x-BALL_R>W) scorePoint(true);
+    }
+    function draw() {
+      const map = currentMap();
+      const bg=ctx.createLinearGradient(0,0,0,H); bg.addColorStop(0,map.top); bg.addColorStop(1,map.bottom);
+      ctx.fillStyle=bg; ctx.fillRect(0,0,W,H);
+      // Themed court grid and center stripe.
+      ctx.strokeStyle=map.glow+'35'; ctx.lineWidth=1;
+      for(let y=70;y<H;y+=65){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();}
+      ctx.setLineDash([8,12]);ctx.strokeStyle=map.glow+'aa';ctx.lineWidth=3;
+      ctx.beginPath();ctx.moveTo(W/2,0);ctx.lineTo(W/2,H);ctx.stroke();ctx.setLineDash([]);
+      if(mode==='adventure') {
+        for(const o of mapObstacles(elapsed)) {
+          ctx.beginPath();ctx.arc(o.x,o.y,o.r,0,Math.PI*2);ctx.fillStyle=map.obstacle+'30';ctx.fill();
+          ctx.lineWidth=3;ctx.strokeStyle=map.obstacle;ctx.shadowColor=map.obstacle;ctx.shadowBlur=18;ctx.stroke();ctx.shadowBlur=0;
+        }
+        ctx.fillStyle=map.glow;ctx.font='bold 15px system-ui';ctx.textAlign='center';ctx.fillText(map.name,W/2,H-16);
+      }
+      ctx.shadowColor=map.glow;ctx.shadowBlur=12;ctx.fillStyle='#eefaff';ctx.font='bold 42px system-ui';ctx.textAlign='center';
+      ctx.fillText(player.score,W/2-60,55);ctx.fillText(cpu.score,W/2+60,55);
+      if(pickup&&mode==='powerup') {
+        ctx.beginPath();ctx.arc(pickup.x,pickup.y,pickup.r,0,Math.PI*2);ctx.fillStyle=pickup.color;ctx.shadowColor=pickup.color;ctx.shadowBlur=20;ctx.fill();
+        ctx.shadowBlur=0;ctx.fillStyle='#101522';ctx.font='bold 9px system-ui';ctx.fillText(pickup.label,pickup.x,pickup.y+3);
+      }
+      ctx.fillStyle=player.effects.grow>0?'#63ff9c':map.glow;ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=18;ctx.fillRect(player.x,player.y,PADDLE_W,player.h);
+      ctx.fillStyle=cpu.effects.shrink>0||cpu.effects.slow>0?'#ffd35a':'#ff69c7';ctx.shadowColor=ctx.fillStyle;ctx.fillRect(cpu.x,cpu.y,PADDLE_W,cpu.h);
+      ctx.beginPath();ctx.arc(ball.x,ball.y,BALL_R,0,Math.PI*2);ctx.fillStyle='#fff';ctx.shadowColor='#fff';ctx.shadowBlur=22;ctx.fill();ctx.shadowBlur=0;
+      if(matchOver) {
+        ctx.fillStyle='#07101dcc';ctx.fillRect(0,0,W,H);ctx.fillStyle='#fff';ctx.textAlign='center';
+        ctx.font='bold 31px system-ui';ctx.fillText(title,W/2,H/2-12);
+        ctx.font='18px system-ui';ctx.fillStyle='#bfefff';ctx.fillText(subtitle,W/2,H/2+25);
+      }
+    }
+    function frame(t) { const dt=Math.min((t-lastTime)/1000||0,.03);lastTime=t;update(dt);draw();requestAnimationFrame(frame); }
+    mapControl.hidden = mode !== 'adventure'; resetReady(); requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
