@@ -4,8 +4,21 @@ const path = require('node:path');
 const projectRoot = path.resolve(__dirname, '..');
 const outputDir = path.join(projectRoot, 'www');
 const gameFile = path.join(projectRoot, 'index_Version7.html');
+const multiplayerFile = path.join(__dirname, 'multiplayer.js');
+const firebaseConfigFile = path.join(projectRoot, 'firebase-config.js');
 
-if (!fs.existsSync(gameFile)) throw new Error(`Game source not found: ${gameFile}`);
-fs.mkdirSync(outputDir, { recursive: true });
-fs.copyFileSync(gameFile, path.join(outputDir, 'index.html'));
-console.log('Copied index_Version7.html to www/index.html');
+for (const file of [gameFile, multiplayerFile, firebaseConfigFile]) {
+  if (!fs.existsSync(file)) throw new Error(`Required file not found: ${file}`);
+}
+
+fs.mkdirSync(path.join(outputDir, 'scripts'), { recursive: true });
+let html = fs.readFileSync(gameFile, 'utf8');
+const injection = '\n<script src="firebase-config.js"></script>\n<script src="scripts/multiplayer.js"></script>\n';
+if (!html.includes('scripts/multiplayer.js')) {
+  if (!html.includes('</body>')) throw new Error('Could not find </body> in game HTML');
+  html = html.replace('</body>', `${injection}</body>`);
+}
+fs.writeFileSync(path.join(outputDir, 'index.html'), html);
+fs.copyFileSync(multiplayerFile, path.join(outputDir, 'scripts', 'multiplayer.js'));
+fs.copyFileSync(firebaseConfigFile, path.join(outputDir, 'firebase-config.js'));
+console.log('Built game and room-code multiplayer into www/');
