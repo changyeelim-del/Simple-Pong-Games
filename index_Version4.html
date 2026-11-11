@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>3D Pong</title>
+  <style>
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      padding: 24px 12px;
+      background: radial-gradient(ellipse at center, #202942, #0b0e16 75%);
+      color: #eef2ff;
+      font-family: system-ui, sans-serif;
+    }
+
+    main { width: min(800px, 94vw); text-align: center; }
+
+    h1 {
+      margin: 0 0 14px;
+      letter-spacing: .12em;
+      text-shadow: 0 0 18px #42e8ff88;
+    }
+
+    .info, .controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .info {
+      justify-content: space-between;
+      margin: 0 4px 10px;
+      color: #c5d3ec;
+      font-weight: 600;
+    }
+
+    .court { perspective: 1000px; }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: auto;
+      border: 2px solid #45d9ff;
+      border-radius: 8px;
+      background: #101b2c;
+      box-shadow: 0 24px 45px #0009, 0 0 24px #31d9ff55;
+      transform: rotateX(7deg);
+      transform-origin: center bottom;
+      touch-action: none;
+    }
+
+    .controls { margin-top: 18px; }
+
+    select, button {
+      border: 0;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font: inherit;
+    }
+
+    select {
+      background: #202942;
+      color: #eef2ff;
+      border: 1px solid #45d9ff;
+    }
+
+    button {
+      background: #45d9ff;
+      color: #07121e;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover { background: #8cecff; }
+
+    input[type="range"] {
+      width: min(220px, 45vw);
+      accent-color: #45d9ff;
+    }
+
+    #speedValue { min-width: 46px; color: #45d9ff; }
+
+    p { color: #aeb8d0; }
+
+    .legend {
+      color: #b8c5dd;
+      font-size: .9rem;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>3D PONG</h1>
+
+    <div class="info">
+      <span id="modeLabel">Trophy Tournament</span>
+      <span id="roundLabel">Ready to play</span>
+      <span id="targetLabel">First to 5</span>
+    </div>
+
+    <div class="court">
+      <canvas id="game" width="800" height="500" aria-label="Pong game"></canvas>
+    </div>
+
+    <div class="controls">
+      <label for="mode">Mode</label>
+      <select id="mode">
+        <option value="trophy">Trophy Tournament</option>
+        <option value="powerup">Power-Up Mode</option>
+      </select>
+
+      <label for="speed">Speed</label>
+      <input id="speed" type="range" min="0.5" max="2" step="0.1" value="1">
+      <span id="speedValue">1.0×</span>
+
+      <button id="startButton">Start game</button>
+    </div>
+
+    <p>Move your mouse over the court or use ↑ / ↓ to control your paddle.</p>
+    <div class="legend">
+      Power-ups: <span style="color:#63ff9c">GROW</span> your paddle ·
+      <span style="color:#ff647c">SHRINK</span> your opponent ·
+      <span style="color:#ffd35a">SLOW</span> your opponent
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById("game");
+    const ctx = canvas.getContext("2d");
+    const modeSelect = document.getElementById("mode");
+    const speedSlider = document.getElementById("speed");
+    const speedValue = document.getElementById("speedValue");
+    const modeLabel = document.getElementById("modeLabel");
+    const roundLabel = document.getElementById("roundLabel");
+    const targetLabel = document.getElementById("targetLabel");
+    const startButton = document.getElementById("startButton");
+
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    const BASE_PADDLE_HEIGHT = 90;
+    const PADDLE_WIDTH = 13;
+    const BALL_RADIUS = 9;
+    const TOURNAMENT_ROUNDS = 3;
+
+    let speedMultiplier = Number(speedSlider.value);
+    let active = false;
+    let matchOver = true;
+    let finishType = "ready";
+    let mode = modeSelect.value;
+    let round = 0;
+    let serveTimer = 0;
+    let powerupTimer = 0;
+    let powerup = null;
+    let lastTime = 0;
+    let overlayTitle = "3D PONG";
+    let overlayText = "Choose a mode and press Start game";
+    const keys = new Set();
+
+    function makePaddle(x) {
+      return {
+        x,
+        y: (HEIGHT - BASE_PADDLE_HEIGHT) / 2,
+        h: BASE_PADDLE_HEIGHT,
+        score: 0,
+        effects: { grow: 0, shrink: 0, slow: 0 }
+      };
+    }
+
+    const player = makePaddle(28);
+    const computer = makePaddle(WIDTH - 28 - PADDLE_WIDTH);
+    const ball = { x: WIDTH / 2, y: HEIGHT / 2, vx: 0, vy: 0 };
+
+    const powerupTypes = [
+      { type: "grow", label: "GROW", color: "#63ff9c" },
+      { type: "shrink", label: "SHRINK", color: "#ff647c" },
+      { type: "slow", label: "SLOW", color: "#ffd35a" }
+    ];
+
+    speedSlider.addEventListener("input", () => {
+      const newSpeed = Number(speedSlider.value);
+      const ratio = newSpeed / speedMultiplier;
+      ball.vx *= ratio;
+      ball.vy *= ratio;
+      speedMultiplier = newSpeed;
+      speedValue.textContent = `${speedMultiplier.toFixed(1)}×`;
+    });
+
+    modeSelect.addEventListener("change", () => {
+      mode = modeSelect.value;
+      modeLabel.textContent = mode === "trophy"
+        ? "Trophy Tournament"
+        : "Power-Up Mode";
+      targetLabel.textContent = mode === "trophy"
+        ? "First to 5 · 3 rounds"
+        : "First to 7";
+      resetToReady();
+    });
+
+    startButton.addEventListener("click", () => {
+      if (!active || finishType === "lost" || finishType === "champion" ||
+          finishType === "specialWin") {
+        startGame();
+      } else if (matchOver && finishType === "advance") {
+        startRound(round + 1);
+      }
+    });
+
+    function resetToReady() {
+      active = false;
+      matchOver = true;
+      finishType = "ready";
+      round = 0;
+      player.score = 0;
+      computer.score = 0;
+      clearEffects(player);
+      clearEffects(computer);
+      powerup = null;
+      roundLabel.textContent = "Ready to play";
+      startButton.textContent = "Start game";
+      overlayTitle = mode === "trophy" ? "TROPHY TOURNAMENT" : "POWER-UP MODE";
+      overlayText = mode === "trophy"
+        ? "Win all three rounds to earn the trophy"
+        : "Collect power-ups and reach 7 points";
+      draw();
+    }
+
+    function startGame() {
+      active = true;
+      if (mode === "trophy") {
+        startRound(1);
+      } else {
+        round = 1;
+        player.score = 0;
+        computer.score = 0;
+        clearEffects(player);
+        clearEffects(computer);
+        matchOver = false;
+        finishType = "";
+        roundLabel.textContent = "Power-Up match";
+        startButton.textContent = "Restart game";
+        overlayTitle = "";
+        overlayText = "";
+        resetBall(Math.random() < 0.5 ? -1 : 1);
+      }
+    }
+
+    function startRound(number) {
+      round = number;
+      player.score = 0;
+      computer.score = 0;
+      clearEffects(player);
+      clearEffects(computer);
+      player.y = (HEIGHT - player.h) / 2;
+      computer.y = (HEIGHT - computer.h) / 2;
+      powerup = null;
+      matchOver = false;
+      finishType = "";
+      overlayTitle = "";
+      overlayText = "";
+      roundLabel.textContent = `Tournament round ${round} of ${TOURNAMENT_ROUNDS}`;
+      startButton.textContent = "Restart tournament";
+      resetBall(Math.random() < 0.5 ? -1 : 1);
+    }
+
+    function clearEffects(paddle) {
+      paddle.effects.grow = 0;
+      paddle.effects.shrink = 0;
+      paddle.effects.slow = 0;
+      paddle.h = BASE_PADDLE_HEIGHT;
+    }
+
+    function clampPaddle(paddle) {
+      paddle.y = Math.max(0, Math.min(HEIGHT - paddle.h, paddle.y));
+    }
+
+    function resetBall(direction) {
+      ball.x = WIDTH / 2;
+      ball.y = HEIGHT / 2;
+      ball.vx = 300 * speedMultiplier * direction;
+      ball.vy = (Math.random() * 240 - 120) * speedMultiplier;
+      serveTimer = 0.7;
+      powerupTimer = 2.5;
+      powerup = null;
+    }
+
+    function setPaddleHeight(paddle, height) {
+      const center = paddle.y + paddle.h / 2;
+      paddle.h = height;
+      paddle.y = center - height / 2;
+      clampPaddle(paddle);
+    }
+
+    canvas.addEventListener("pointermove", (event) => {
+      const rect = canvas.getBoundingClientRect();
+      player.y = (event.clientY - rect.top) * HEIGHT / rect.height
+        - player.h / 2;
+      clampPaddle(player);
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowUp" || event.key === "ArrowDown") {
+        event.preventDefault();
+        keys.add(event.key);
+      }
+    });
+
+    window.addEventListener("keyup", (event) => keys.delete(event.key));
+    window.addEventListener("blur", () => keys.clear());
+
+    function hitPaddle(paddle) {
+      return ball.x + BALL_RADIUS > paddle.x &&
+        ball.x - BALL_RADIUS < paddle.x + PADDLE_WIDTH &&
+        ball.y + BALL_RADIUS > paddle.y &&
+        ball.y - BALL_RADIUS < paddle.y + paddle.h;
+    }
+
+    function applyPowerup(type, hitter) {
+      const owner = hitter === "computer" ? computer : player;
+      const opponent = hitter === "computer" ? player : computer;
+
+      if (type === "grow") {
+        owner.effects.grow = 7;
+      } else if (type === "shrink") {
+        opponent.effects.shrink = 7;
+      } else if (type === "slow") {
+        opponent.effects.slow = 7;
+      }
+
+      powerup = null;
+    }
+
+    function spawnPowerup() {
+      const item = powerupTypes[Math.floor(Math.random() * powerupTypes.length)];
+      powerup = {
+        ...item,
+        x: WIDTH / 2 + (Math.random() * 120 - 60),
+        y: 80 + Math.random() * (HEIGHT - 160),
+        radius: 19
+      };
+    }
+
+    function updatePaddleEffects(paddle, delta) {
+      for (const effect of Object.keys(paddle.effects)) {
+        paddle.effects[effect] = Math.max(0, paddle.effects[effect] - delta);
+      }
+
+      const height = paddle.effects.grow > 0
+        ? 130
+        : paddle.effects.shrink > 0
+          ? 58
+          : BASE_PADDLE_HEIGHT;
+
+      if (height !== paddle.h) setPaddleHeight(paddle, height);
+    }
+
+    function endMatch() {
+      matchOver = true;
+      ball.vx = 0;
+      ball.vy = 0;
+      powerup = null;
+
+      if (mode === "trophy") {
+        if (player.score >= 5) {
+          if (round === TOURNAMENT_ROUNDS) {
+            finishType = "champion";
+            overlayTitle = "🏆 TOURNAMENT CHAMPION!";
+            overlayText = "You won all three rounds!";
+            roundLabel.textContent = "Trophy earned!";
+            startButton.textContent = "Play again";
+          } else {
+            finishType = "advance";
+            overlayTitle = `ROUND ${round} WON!`;
+            overlayText = "You advanced to the next round.";
+            roundLabel.textContent = `Round ${round} complete`;
+            startButton.textContent = "Next round";
+          }
+        } else {
+          finishType = "lost";
+          overlayTitle = "TOURNAMENT OVER";
+          overlayText = `You reached round ${round}. Try again!`;
+          roundLabel.textContent = "Tournament ended";
+          startButton.textContent = "Try again";
+        }
+      } else {
+        finishType = player.score >= 7 ? "specialWin" : "lost";
+        overlayTitle = player.score >= 7 ? "POWER-UP CHAMPION!" : "MATCH OVER";
+        overlayText = player.score >= 7
+          ? "You won the Power-Up match!"
+          : "Try another match!";
+        roundLabel.textContent = player.score >= 7 ? "Victory!" : "Defeat";
+        startButton.textContent = "Play again";
+      }
+    }
+
+    function scorePoint(forPlayer) {
+      if (forPlayer) player.score++;
+      else computer.score++;
+
+      const target = mode === "trophy" ? 5 : 7;
+      if (player.score >= target || computer.score >= target) {
+        endMatch();
+      } else {
+        resetBall(forPlayer ? -1 : 1);
+      }
+    }
+
+    function update(delta) {
+      if (!active || matchOver) return;
+
+      updatePaddleEffects(player, delta);
+      updatePaddleEffects(computer, delta);
+
+      if (keys.has("ArrowUp")) player.y -= 420 * delta;
+      if (keys.has("ArrowDown")) player.y += 420 * delta;
+      clampPaddle(player);
+
+      const aiSpeed = (260 + (mode === "trophy" ? round * 70 : 60))
+        * speedMultiplier
+        * (computer.effects.slow > 0 ? 0.48 : 1);
+      const difference = ball.y - (computer.y + computer.h / 2);
+      computer.y += Math.sign(difference) *
+        Math.min(Math.abs(difference), aiSpeed * delta);
+      clampPaddle(computer);
+
+      if (serveTimer > 0) {
+        serveTimer -= delta;
+        return;
+      }
+
+      ball.x += ball.vx * delta;
+      ball.y += ball.vy * delta;
+
+      // Top and bottom wall collisions.
+      if (ball.y - BALL_RADIUS <= 0) {
+        ball.y = BALL_RADIUS;
+        ball.vy = Math.abs(ball.vy);
+      } else if (ball.y + BALL_RADIUS >= HEIGHT) {
+        ball.y = HEIGHT - BALL_RADIUS;
+        ball.vy = -Math.abs(ball.vy);
+      }
+
+      // Paddle collisions; hit location controls the bounce angle.
+      for (const paddle of [player, computer]) {
+        const movingTowardPaddle = paddle === player
+          ? ball.vx < 0
+          : ball.vx > 0;
+
+        if (hitPaddle(paddle) && movingTowardPaddle) {
+          const offset = (ball.y - (paddle.y + paddle.h / 2)) / (paddle.h / 2);
+          const direction = paddle === player ? 1 : -1;
+          const currentSpeed = Math.hypot(ball.vx, ball.vy);
+          const newSpeed = Math.min(currentSpeed * 1.05, 700 * speedMultiplier);
+
+          ball.vx = direction * newSpeed * Math.cos(offset * 0.9);
+          ball.vy = newSpeed * Math.sin(offset * 0.9);
+          ball.x = paddle === player
+            ? paddle.x + PADDLE_WIDTH + BALL_RADIUS
+            : paddle.x - BALL_RADIUS;
+
+          // Remember which paddle last hit the ball for power-up effects.
+          ball.lastHitter = paddle === player ? "player" : "computer";
+        }
+      }
+
+      if (mode === "powerup") {
+        powerupTimer -= delta;
+        if (!powerup && powerupTimer <= 0) {
+          spawnPowerup();
+          powerupTimer = 8;
+        }
+
+        if (powerup) {
+          const dx = ball.x - powerup.x;
+          const dy = ball.y - powerup.y;
+          if (Math.hypot(dx, dy) < BALL_RADIUS + powerup.radius) {
+            applyPowerup(powerup.type, ball.lastHitter || "player");
+          }
+        }
+      }
+
+      if (ball.x + BALL_RADIUS < 0) scorePoint(false);
+      else if (ball.x - BALL_RADIUS > WIDTH) scorePoint(true);
+    }
+
+    function draw() {
+      const gradient = ctx.createLinearGradient(0, 0, 0, HEIGHT);
+      gradient.addColorStop(0, "#15253a");
+      gradient.addColorStop(1, "#0b1422");
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+      // Court lines and center divider.
+      ctx.strokeStyle = "#294762";
+      ctx.lineWidth = 1;
+      for (let y = 100; y < HEIGHT; y += 80) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(WIDTH, y);
+        ctx.stroke();
+      }
+
+      ctx.setLineDash([8, 12]);
+      ctx.strokeStyle = "#49dfff99";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.moveTo(WIDTH / 2, 0);
+      ctx.lineTo(WIDTH / 2, HEIGHT);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Scoreboard.
+      ctx.shadowColor = "#45d9ff";
+      ctx.shadowBlur = 12;
+      ctx.fillStyle = "#eefaff";
+      ctx.font = "bold 42px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(player.score, WIDTH / 2 - 60, 58);
+      ctx.fillText(computer.score, WIDTH / 2 + 60, 58);
+
+      // Power-up collectible.
+      if (powerup && mode === "powerup") {
+        ctx.beginPath();
+        ctx.arc(powerup.x, powerup.y, powerup.radius, 0, Math.PI * 2);
+        ctx.fillStyle = powerup.color;
+        ctx.shadowColor = powerup.color;
+        ctx.shadowBlur = 20;
+        ctx.fill();
+
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#101522";
+        ctx.font = "bold 9px system-ui, sans-serif";
+        ctx.fillText(powerup.label, powerup.x, powerup.y + 3);
+      }
+
+      // Paddles and ball.
+      ctx.fillStyle = player.effects.grow > 0 ? "#63ff9c" : "#45d9ff";
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.shadowBlur = 18;
+      ctx.fillRect(player.x, player.y, PADDLE_WIDTH, player.h);
+
+      ctx.fillStyle = computer.effects.shrink > 0 || computer.effects.slow > 0
+        ? "#ffd35a"
+        : "#ff69c7";
+      ctx.shadowColor = ctx.fillStyle;
+      ctx.fillRect(computer.x, computer.y, PADDLE_WIDTH, computer.h);
+
+      ctx.beginPath();
+      ctx.arc(ball.x, ball.y, BALL_RADIUS, 0, Math.PI * 2);
+      ctx.fillStyle = "#fff";
+      ctx.shadowColor = "#fff";
+      ctx.shadowBlur = 22;
+      ctx.fill();
+
+      if (matchOver) {
+        ctx.fillStyle = "#07101dcc";
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.font = "bold 32px system-ui, sans-serif";
+        ctx.fillText(overlayTitle, WIDTH / 2, HEIGHT / 2 - 12);
+        ctx.font = "19px system-ui, sans-serif";
+        ctx.fillStyle = "#bfefff";
+        ctx.fillText(overlayText, WIDTH / 2, HEIGHT / 2 + 26);
+      }
+
+      ctx.shadowBlur = 0;
+    }
+
+    function frame(time) {
+      const delta = Math.min((time - lastTime) / 1000 || 0, 0.03);
+      lastTime = time;
+      update(delta);
+      draw();
+      requestAnimationFrame(frame);
+    }
+
+    resetToReady();
+    requestAnimationFrame(frame);
+  </script>
+</body>
+</html>
