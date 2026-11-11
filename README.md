@@ -1,6 +1,6 @@
 # Simple Pong Games — Android setup
 
-This repository packages the HTML Pong game as an Android app using Capacitor. The current game is `index_Version5.html`, featuring Adventure maps, Trophy Tournament, and Power-Up modes. The build script copies it to Capacitor's web assets directory (`www/index.html`). `index_Version4.html` is retained as the earlier version.
+The current game is `index_Version6.html`, packaged for Android with Capacitor. The build script copies it to `www/index.html`. Earlier game versions are retained for reference.
 
 ## Requirements
 
@@ -19,7 +19,7 @@ npm run android:sync
 npm run android:open
 ```
 
-Run `android:add` only once. For later game changes, run:
+Run `android:add` only once. For later game updates:
 
 ```bash
 npm run android:sync
@@ -27,14 +27,17 @@ npm run android:sync
 
 Then run the app from Android Studio on an emulator or connected Android device.
 
-## Game modes
+## Game features
 
-- **Adventure:** Choose a starting map and win across four themed maps. Each map has distinctive colors and center bumpers; bumpers move on the Lava Rift and Cosmic Core maps.
-- **Trophy Tournament:** Win three rounds, with the computer getting harder each round.
-- **Power-Up:** Collect temporary paddle grow, opponent shrink, and opponent slow effects.
+- **Adventure:** Four themed maps with obstacles. Clearing a map unlocks the next one.
+- **Boss Battle:** Challenge the faster, oversized boss paddle.
+- **Trophy Tournament:** Win three progressively harder rounds.
+- **Power-Up:** Paddle growth, opponent shrink, and opponent slow pickups.
+- **Shop and coins:** Earn coins from victories and use them to buy/equip paddle colors. Coins, owned skins, and map unlocks are saved locally on the device.
+- **Audio:** Procedural sound effects and a simple synthesized background melody. Audio starts after the player interacts with the game, as required by mobile browsers.
 
 ## Google Play release
 
-In Android Studio, create a signed Android App Bundle (`.aab`) using **Build → Generate Signed Bundle / APK… → Android App Bundle**. Keep the signing key private and backed up. Upload the bundle through your Google Play Console account and complete the store listing and release requirements there.
+In Android Studio, create a signed Android App Bundle (`.aab`) using **Build → Generate Signed Bundle / APK… → Android App Bundle**. Keep the signing key private and backed up. Upload the bundle through Google Play Console and complete the store listing and release requirements there.
 
-The configured application ID is `com.changyeelim.simpleponggames`. Choose your final unique application ID before publishing; changing it after publishing creates a different Play Store app. Google Play requirements can change, so check the current Play Console guidance before release.
+The configured application ID is `com.changyeelim.simpleponggames`. Choose your final unique application ID before publishing; changing it after publishing creates a different Play Store app. Check current Play Console requirements before release.
