@@ -13,7 +13,9 @@ for (const file of [gameFile, multiplayerFile, firebaseConfigFile]) {
 
 fs.mkdirSync(path.join(outputDir, 'scripts'), { recursive: true });
 let html = fs.readFileSync(gameFile, 'utf8');
-const injection = '\n<script src="firebase-config.js"></script>\n<script src="scripts/multiplayer.js"></script>\n';
+// Add a unique build query to avoid mobile browsers reusing a stale multiplayer script.
+const buildVersion = Date.now().toString(36);
+const injection = `\n<script src="firebase-config.js?v=${buildVersion}"></script>\n<script src="scripts/multiplayer.js?v=${buildVersion}"></script>\n`;
 if (!html.includes('scripts/multiplayer.js')) {
   if (!html.includes('</body>')) throw new Error('Could not find </body> in game HTML');
   html = html.replace('</body>', `${injection}</body>`);
@@ -21,4 +23,4 @@ if (!html.includes('scripts/multiplayer.js')) {
 fs.writeFileSync(path.join(outputDir, 'index.html'), html);
 fs.copyFileSync(multiplayerFile, path.join(outputDir, 'scripts', 'multiplayer.js'));
 fs.copyFileSync(firebaseConfigFile, path.join(outputDir, 'firebase-config.js'));
-console.log('Built game and room-code multiplayer into www/');
+console.log(`Built game and room-code multiplayer into www/ (asset version ${buildVersion})`);
