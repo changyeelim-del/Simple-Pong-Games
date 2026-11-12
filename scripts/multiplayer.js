@@ -8,14 +8,15 @@
     #onlineCard { width: min(820px, 96vw); padding: 14px; border: 1px solid #45d9ff; border-radius: 12px; background: #101827; box-shadow: 0 0 35px #31d9ff44; text-align: center; }
     #onlineCard h2 { margin: 4px 0 10px; }
     #onlineCard .online-row { display: flex; justify-content: center; align-items: center; gap: 8px; flex-wrap: wrap; margin: 9px 0; }
-    #onlineCard button, #onlineCard input { border: 0; border-radius: 6px; padding: 10px 12px; font: inherit; }
+    #onlineCard button, #onlineCard input, #onlineCard select { border: 0; border-radius: 6px; padding: 10px 12px; font: inherit; }
     #onlineCard button { background: #45d9ff; color: #07121e; font-weight: 700; }
     #onlineCard button:disabled { opacity: .5; }
-    #onlineCard input { width: 150px; background: #202942; color: white; border: 1px solid #45d9ff; text-transform: uppercase; }
+    #onlineCard input, #onlineCard select { background: #202942; color: white; border: 1px solid #45d9ff; }
+    #onlineCode { width: 150px; text-transform: uppercase; }
     #onlineStatus { min-height: 1.5em; color: #bfefff; }
     #onlineCanvas { display: block; width: 100%; height: auto; border: 2px solid #45d9ff; border-radius: 8px; background: #101b2c; touch-action: none; }
     #onlineExit { background: #ff8c9f !important; }
-    #onlineStart[hidden] { display: none; }
+    #onlineStart[hidden], #onlineRematch[hidden], #onlineChangeMode[hidden] { display: none; }
     #onlineSettings { margin: 8px 0; color: #dce8ff; }
     #onlineSettings input { width: min(220px, 50vw); accent-color: #45d9ff; vertical-align: middle; }
   `;
@@ -34,7 +35,7 @@
       <div id="onlineStatus" role="status">Create a room and share its code, or enter a friend's code.</div>
       <div id="onlineRoom" hidden>
         <div class="online-row"><strong>Room code: <span id="onlineCodeDisplay"></span></strong><button id="onlineCopy">Copy code</button></div>
-        <div class="online-row"><button id="onlineStart" hidden>▶ Start match</button></div>
+        <div class="online-row"><label for="onlineMode">Mode</label><select id="onlineMode"><option value="classic">Classic</option><option value="adventure">Adventure · obstacles</option><option value="boss">Boss · larger host paddle</option><option value="powerup">Power-up · faster bounces</option></select><button id="onlineStart" hidden>▶ Start match</button><button id="onlineRematch" hidden>↻ Rematch</button><button id="onlineChangeMode" hidden>🎮 Change mode</button></div>
         <label id="onlineSettings">Controller smoothing: <span id="smoothValue">35%</span><br><input id="smoothness" type="range" min="0" max="100" value="35"><br><small>0% = instant · 100% = smooth</small></label>
         <canvas id="onlineCanvas" width="800" height="500" aria-label="Online Pong court"></canvas>
         <p>Drag on the court or use ↑ / ↓. First to 5 wins.</p>
@@ -50,10 +51,13 @@
   let db = null, auth = null, uid = null, roomRef = null, roomCode = '', role = '', state = null;
   let roomUnsub = null, stateUnsub = null, guestInputUnsub = null;
   let raf = 0, lastFrame = 0, lastPublish = 0, lastInputWrite = 0;
-  let localY = 250, smoothY = 250, guestTargetY = 250, smoothing = Number(localStorage.getItem('pongControllerSmoothing') || 35);
+  let localY = 250, smoothY = 250, guestTargetY = 250, smoothing = 35;
+  try { smoothing = Number(localStorage.getItem('pongControllerSmoothing') || 35); } catch {}
   let isVisible = false, roomStatus = 'idle', ending = false;
+  let previousGuestState = null, guestStateReceivedAt = 0, previousGuestReceivedAt = 0;
   const gameCanvas = $('onlineCanvas'), gameCtx = gameCanvas.getContext('2d');
   const GAME_W = 800, GAME_H = 500, PW = 14, PAD_H = 90, BALL_R = 9;
+  const MODES = ['classic', 'adventure', 'boss', 'powerup'];
 
   function loadSdk(src) {
     return new Promise((resolve, reject) => {
@@ -65,9 +69,7 @@
   }
   async function connectFirebase() {
     if (db && auth && uid) return;
-    if (!config || !config.apiKey || config.apiKey.startsWith('YOUR_') || !config.databaseURL || config.databaseURL.includes('YOUR_')) {
-      throw new Error('Firebase is not configured. Check firebase-config.js and rebuild the site.');
-    }
+    if (!config || !config.apiKey || config.apiKey.startsWith('YOUR_') || !config.databaseURL || config.databaseURL.includes('YOUR_')) throw new Error('Firebase is not configured. Check firebase-config.js and rebuild the site.');
     if (!window.firebase?.database) {
       const base = 'https://www.gstatic.com/firebasejs/10.14.1/';
       await loadSdk(base + 'firebase-app-compat.js');
@@ -84,8 +86,19 @@
     crypto.getRandomValues(bytes);
     return Array.from(bytes, b => chars[b % chars.length]).join('');
   }
-  function initialState() {
-    return { ballX: 400, ballY: 250, ballVX: 300, ballVY: 90, hostY: 250, guestY: 250, hostScore: 0, guestScore: 0, serve: .65, winner: '', updatedAt: Date.now() };
+  function initialState(mode = 'classic') {
+    return { mode, ballX: 400, ballY: 250, ballVX: 300, ballVY: 90, hostY: 250, guestY: 250, hostScore: 0, guestScore: 0, serve: .65, winner: '', updatedAt: Date.now(), power: 0 };
+  }
+  function clampY(y) { return Math.max(PAD_H / 2, Math.min(GAME_H - PAD_H / 2, Number(y) || GAME_H / 2)); }
+  function sanitizeState(value) {
+    const fresh = initialState(MODES.includes(value?.mode) ? value.mode : 'classic');
+    if (!value || typeof value !== 'object') return fresh;
+    for (const key of ['ballX','ballY','ballVX','ballVY','hostY','guestY','serve','power']) if (Number.isFinite(value[key])) fresh[key] = value[key];
+    fresh.hostScore = Math.max(0, Math.min(TARGET_SCORE, Math.floor(Number(value.hostScore) || 0)));
+    fresh.guestScore = Math.max(0, Math.min(TARGET_SCORE, Math.floor(Number(value.guestScore) || 0)));
+    fresh.winner = value.winner === 'host' || value.winner === 'guest' ? value.winner : '';
+    fresh.updatedAt = Number(value.updatedAt) || Date.now();
+    return fresh;
   }
   function stopListeners() {
     if (roomUnsub) roomRef?.off('value', roomUnsub);
@@ -96,8 +109,10 @@
   }
   function resetRoomUi() {
     stopListeners(); roomRef = null; roomCode = ''; role = ''; state = null; roomStatus = 'idle'; ending = false;
+    previousGuestState = null; guestStateReceivedAt = previousGuestReceivedAt = 0;
     $('onlineRoom').hidden = true; $('onlineCreate').disabled = $('onlineJoin').disabled = false;
-    $('onlineCode').disabled = false; $('onlineCodeDisplay').textContent = ''; $('onlineStart').hidden = true;
+    $('onlineCode').disabled = false; $('onlineCodeDisplay').textContent = '';
+    $('onlineStart').hidden = $('onlineRematch').hidden = $('onlineChangeMode').hidden = true;
   }
   function enterOverlay() { isVisible = true; overlay.hidden = false; }
   async function createRoom() {
@@ -108,18 +123,12 @@
         roomCode = randomCode(); roomRef = db.ref('rooms/' + roomCode);
         if ((await roomRef.child('hostUid').once('value')).exists()) continue;
         await roomRef.child('hostUid').set(uid);
-        state = initialState();
-        await Promise.all([
-          roomRef.child('status').set('waiting'),
-          roomRef.child('createdAt').set(firebase.database.ServerValue.TIMESTAMP),
-          roomRef.child('state').set(state),
-          roomRef.child('inputs/host').set(250)
-        ]);
+        state = initialState($('onlineMode').value);
+        await Promise.all([roomRef.child('status').set('waiting'), roomRef.child('createdAt').set(firebase.database.ServerValue.TIMESTAMP), roomRef.child('state').set(state), roomRef.child('inputs/host').set(250)]);
         role = 'host'; roomStatus = 'waiting';
         $('onlineCodeDisplay').textContent = roomCode; $('onlineRoom').hidden = false;
         $('onlineCode').value = roomCode; $('onlineCode').disabled = true; $('onlineCreate').disabled = true;
-        setStatus('Room created. Share the code and wait for your friend to join.');
-        watchRoom(); return;
+        setStatus('Room created. Share the code and wait for your friend to join.'); watchRoom(); return;
       }
       throw new Error('Could not find an unused room code. Please try again.');
     } catch (error) { resetRoomUi(); setStatus(error.message || 'Could not create room.'); }
@@ -140,179 +149,163 @@
       await roomRef.child('inputs/guest').set(250);
       role = 'guest'; roomStatus = 'waiting';
       $('onlineCodeDisplay').textContent = roomCode; $('onlineRoom').hidden = false; $('onlineCode').disabled = true;
-      setStatus('Joined! Waiting for the host to press Start match.'); watchRoom();
+      $('onlineMode').value = MODES.includes(room.state?.mode) ? room.state.mode : 'classic'; $('onlineMode').disabled = true;
+      setStatus('Joined! Waiting for the host to start match.'); watchRoom();
     } catch (error) { resetRoomUi(); $('onlineCode').value = code; setStatus(error.message || 'Could not join room.'); }
   }
   function watchRoom() {
     roomUnsub = snap => {
       if (!snap.exists()) { setStatus('The room was closed.'); resetRoomUi(); return; }
-      const room = snap.val();
-      roomStatus = room.status || 'waiting';
+      const room = snap.val(); roomStatus = room.status || 'waiting';
+      if (room.state?.mode && MODES.includes(room.state.mode)) $('onlineMode').value = room.state.mode;
+      $('onlineMode').disabled = role !== 'host' || !['waiting','finished'].includes(roomStatus);
       if (role === 'host') {
         const canStart = Boolean(room.guestUid) && roomStatus === 'waiting';
         $('onlineStart').hidden = !canStart;
-        $('onlineStart').disabled = false;
+        $('onlineRematch').hidden = !(room.guestUid && roomStatus === 'finished');
+        $('onlineChangeMode').hidden = !(room.guestUid && roomStatus === 'finished');
         if (roomStatus === 'playing') setStatus('Match in progress! You control the left paddle.');
-        else if (roomStatus === 'finished') setStatus(room.state?.winner === 'host' ? 'You won!' : 'You lost!');
+        else if (roomStatus === 'finished') setStatus(`${room.state?.winner === 'host' ? 'You won!' : 'You lost!'} Choose Rematch or Change mode.`);
         else setStatus(room.guestUid ? 'Player joined. Press Start match when ready.' : 'Room created. Share the code and wait for your friend.');
       } else {
-        $('onlineStart').hidden = true;
+        $('onlineStart').hidden = $('onlineRematch').hidden = $('onlineChangeMode').hidden = true;
         if (roomStatus === 'playing') setStatus('Match in progress! You control the right paddle.');
-        else if (roomStatus === 'finished') setStatus(room.state?.winner === 'guest' ? 'You won!' : 'You lost!');
-        else setStatus('Joined! Waiting for the host to press Start match.');
+        else if (roomStatus === 'finished') setStatus(`${room.state?.winner === 'guest' ? 'You won!' : 'You lost!'} Waiting for host to choose a rematch or mode.`);
+        else setStatus('Joined! Waiting for the host to start match.');
       }
       if (roomStatus === 'playing') startGameLoop();
       else { cancelAnimationFrame(raf); raf = 0; draw(); }
     };
     roomRef.on('value', roomUnsub);
     if (role === 'guest') {
-      stateUnsub = snap => { if (snap.exists()) { state = sanitizeState(snap.val()); draw(); } };
+      stateUnsub = snap => {
+        if (!snap.exists()) return;
+        const next = sanitizeState(snap.val()), received = performance.now();
+        previousGuestState = state; previousGuestReceivedAt = guestStateReceivedAt;
+        state = next; guestStateReceivedAt = received; draw();
+      };
       roomRef.child('state').on('value', stateUnsub);
     } else {
       guestInputUnsub = snap => { if (Number.isFinite(snap.val())) guestTargetY = clampY(snap.val()); };
       roomRef.child('inputs/guest').on('value', guestInputUnsub);
     }
   }
-  function sanitizeState(value) {
-    const fresh = initialState();
-    if (!value || typeof value !== 'object') return fresh;
-    for (const key of ['ballX','ballY','ballVX','ballVY','hostY','guestY','serve']) if (Number.isFinite(value[key])) fresh[key] = value[key];
-    fresh.hostScore = Math.max(0, Math.min(TARGET_SCORE, Math.floor(Number(value.hostScore) || 0)));
-    fresh.guestScore = Math.max(0, Math.min(TARGET_SCORE, Math.floor(Number(value.guestScore) || 0)));
-    fresh.winner = value.winner === 'host' || value.winner === 'guest' ? value.winner : '';
-    fresh.updatedAt = Number(value.updatedAt) || Date.now();
-    return fresh;
+  function ease(current, target, dt) {
+    const amount = Math.max(0, Math.min(100, smoothing));
+    if (!amount) return target;
+    const seconds = .015 + (amount / 100) * .30;
+    return current + (target - current) * (1 - Math.exp(-dt / seconds));
   }
-  async function startMatch() {
-    if (role !== 'host' || roomStatus !== 'waiting' || !roomRef) return;
-    $('onlineStart').disabled = true;
+  async function startMatch(mode = $('onlineMode').value) {
+    if (role !== 'host' || !['waiting','finished'].includes(roomStatus) || !roomRef) return;
     try {
       const snap = await roomRef.once('value'), room = snap.val();
-      if (!room?.guestUid || room.status !== 'waiting') throw new Error('Wait for a player to join before starting.');
-      state = initialState(); state.hostY = clampY(smoothY);
+      if (!room?.guestUid) throw new Error('Wait for a player to join before starting.');
+      state = initialState(MODES.includes(mode) ? mode : 'classic'); state.hostY = clampY(smoothY);
+      ending = false;
       await roomRef.child('state').set(state);
       await roomRef.child('status').set('playing');
       roomStatus = 'playing'; startGameLoop();
-    } catch (error) { $('onlineStart').disabled = false; setStatus((error.message || 'Could not start.') + ' Check database rules and connection.'); }
+    } catch (error) { setStatus((error.message || 'Could not start.') + ' Check database rules and connection.'); }
   }
+  async function changeMode() { if (role !== 'host' || roomStatus !== 'finished') return; try { const next = initialState($('onlineMode').value); await roomRef.child('state').set(next); await roomRef.child('status').set('waiting'); roomStatus = 'waiting'; setStatus('Mode selected. Press Start match when ready.'); } catch (error) { setStatus(error.message || 'Could not change mode.'); } }
   function startGameLoop() { if (raf || !isVisible || !roomRef || roomStatus !== 'playing') return; lastFrame = 0; raf = requestAnimationFrame(frame); }
-  function clampY(y) { return Math.max(PAD_H / 2, Math.min(GAME_H - PAD_H / 2, Number(y) || GAME_H / 2)); }
-  function ease(current, target, dt) {
-    if (smoothing <= 0) return target;
-    const seconds = .015 + (smoothing / 100) * .30;
-    return current + (target - current) * (1 - Math.exp(-dt / seconds));
-  }
   function publishInput() {
-    if (!roomRef || !role || roomStatus !== 'playing') return;
-    if (role === 'host') return;
-    const now = performance.now();
-    if (now - lastInputWrite < 45) return;
+    if (!roomRef || !role || roomStatus !== 'playing' || role === 'host') return;
+    const now = performance.now(); if (now - lastInputWrite < 25) return;
     lastInputWrite = now;
     roomRef.child('inputs/guest').set(clampY(localY)).catch(() => setStatus('Connection interrupted while sending paddle input.'));
   }
   function finishMatch(winner) {
-    if (ending || roomStatus === 'finished') return;
-    ending = true; roomStatus = 'finished';
-    state.winner = winner;
-    if (winner === 'host') state.hostScore = TARGET_SCORE;
-    else state.guestScore = TARGET_SCORE;
+    if (ending || roomStatus !== 'playing') return;
+    ending = true; roomStatus = 'finished'; state.winner = winner;
+    if (winner === 'host') state.hostScore = TARGET_SCORE; else state.guestScore = TARGET_SCORE;
     cancelAnimationFrame(raf); raf = 0; draw();
-    // Stop locally before asynchronous writes so no extra point can be awarded.
-    roomRef.child('state').set(state).then(() => roomRef.child('status').set('finished'))
-      .catch(() => setStatus('Match ended locally, but Firebase could not save the final score.'));
+    roomRef.child('state').set(state).then(() => roomRef.child('status').set('finished')).catch(() => setStatus('Match ended locally, but Firebase could not save the final score.'));
   }
-  function hostUpdate(dt) {
+  function updateHost(dt) {
     if (!state || roomStatus !== 'playing' || ending) return;
-    state.hostY = ease(state.hostY, localY, dt);
-    state.guestY = ease(state.guestY, guestTargetY, dt);
-    if (state.hostScore >= TARGET_SCORE) { finishMatch('host'); return; }
-    if (state.guestScore >= TARGET_SCORE) { finishMatch('guest'); return; }
+    state.hostY = ease(state.hostY, localY, dt); state.guestY = ease(state.guestY, guestTargetY, dt);
+    if (state.hostScore >= TARGET_SCORE) return finishMatch('host');
+    if (state.guestScore >= TARGET_SCORE) return finishMatch('guest');
     if (state.serve > 0) { state.serve = Math.max(0, state.serve - dt); return; }
     state.ballX += state.ballVX * dt; state.ballY += state.ballVY * dt;
     if (state.ballY - BALL_R < 0) { state.ballY = BALL_R; state.ballVY = Math.abs(state.ballVY); }
     if (state.ballY + BALL_R > GAME_H) { state.ballY = GAME_H - BALL_R; state.ballVY = -Math.abs(state.ballVY); }
-    const paddles = [{ x:28, y:state.hostY-PAD_H/2, side:'host' }, { x:GAME_W-42, y:state.guestY-PAD_H/2, side:'guest' }];
-    for (const p of paddles) {
-      const toward = p.side === 'host' ? state.ballVX < 0 : state.ballVX > 0;
-      if (toward && state.ballX+BALL_R>p.x && state.ballX-BALL_R<p.x+PW && state.ballY+BALL_R>p.y && state.ballY-BALL_R<p.y+PAD_H) {
-        const offset = Math.max(-1, Math.min(1, (state.ballY-(p.y+PAD_H/2))/(PAD_H/2)));
-        const dir = p.side === 'host' ? 1 : -1;
-        const velocity = Math.min(Math.hypot(state.ballVX,state.ballVY)*1.035,650);
-        state.ballVX = dir*velocity*Math.cos(offset*.85); state.ballVY = velocity*Math.sin(offset*.85);
-        state.ballX = p.side === 'host' ? p.x+PW+BALL_R : p.x-BALL_R;
+    if (state.mode === 'adventure') {
+      for (const obstacle of [{x:400,y:170,r:20},{x:400,y:330,r:20}]) {
+        const dx=state.ballX-obstacle.x,dy=state.ballY-obstacle.y,d=Math.hypot(dx,dy),min=BALL_R+obstacle.r;
+        if (d>0&&d<min) { const nx=dx/d,ny=dy/d,dot=state.ballVX*nx+state.ballVY*ny; if(dot<0){state.ballVX-=2*dot*nx;state.ballVY-=2*dot*ny;state.ballX=obstacle.x+nx*min;state.ballY=obstacle.y+ny*min;} }
       }
     }
-    let scored = false;
-    if (state.ballX + BALL_R < 0 && state.hostScore < TARGET_SCORE) { state.guestScore++; scored = true; }
-    else if (state.ballX - BALL_R > GAME_W && state.guestScore < TARGET_SCORE) { state.hostScore++; scored = true; }
-    if (scored) {
-      if (state.hostScore >= TARGET_SCORE) { finishMatch('host'); return; }
-      if (state.guestScore >= TARGET_SCORE) { finishMatch('guest'); return; }
-      const dir = state.hostScore > state.guestScore ? -1 : 1;
-      state.ballX = GAME_W/2; state.ballY = GAME_H/2; state.ballVX = 300*dir;
-      state.ballVY = Math.random()*180-90; state.serve = .7;
+    const hostH = state.mode === 'boss' ? PAD_H * 1.5 : PAD_H;
+    for (const p of [{x:28,y:state.hostY-hostH/2,h:hostH,side:'host'},{x:GAME_W-42,y:state.guestY-PAD_H/2,h:PAD_H,side:'guest'}]) {
+      const toward=p.side==='host'?state.ballVX<0:state.ballVX>0;
+      if(toward&&state.ballX+BALL_R>p.x&&state.ballX-BALL_R<p.x+PW&&state.ballY+BALL_R>p.y&&state.ballY-BALL_R<p.y+p.h){
+        const offset=Math.max(-1,Math.min(1,(state.ballY-(p.y+p.h/2))/(p.h/2))),dir=p.side==='host'?1:-1;
+        const multiplier=state.mode==='powerup'?1.12:1,velocity=Math.min(Math.hypot(state.ballVX,state.ballVY)*1.035*multiplier,650);
+        state.ballVX=dir*velocity*Math.cos(offset*.85);state.ballVY=velocity*Math.sin(offset*.85);state.ballX=p.side==='host'?p.x+PW+BALL_R:p.x-BALL_R;
+      }
     }
+    let scored=false;
+    if(state.ballX+BALL_R<0&&state.hostScore<TARGET_SCORE){state.guestScore++;scored=true;}
+    else if(state.ballX-BALL_R>GAME_W&&state.guestScore<TARGET_SCORE){state.hostScore++;scored=true;}
+    if(scored){
+      if(state.hostScore>=TARGET_SCORE)return finishMatch('host');
+      if(state.guestScore>=TARGET_SCORE)return finishMatch('guest');
+      const dir=state.hostScore>state.guestScore?-1:1;state.ballX=GAME_W/2;state.ballY=GAME_H/2;state.ballVX=300*dir;state.ballVY=Math.random()*180-90;state.serve=.7;
+    }
+  }
+  function interpolateGuest(now) {
+    if (!state || !previousGuestState || !previousGuestReceivedAt || guestStateReceivedAt <= previousGuestReceivedAt) return state;
+    const targetTime = now - 85;
+    const alpha = Math.max(0, Math.min(1, (targetTime - previousGuestReceivedAt) / (guestStateReceivedAt - previousGuestReceivedAt)));
+    const view = { ...state };
+    for (const key of ['ballX','ballY','hostY','guestY']) view[key] = previousGuestState[key] + (state[key] - previousGuestState[key]) * alpha;
+    return view;
   }
   function frame(t) {
-    raf = 0;
-    if (!isVisible || roomStatus !== 'playing' || !roomRef || ending) return;
-    const dt = Math.min(((t-lastFrame)/1000)||0, .035); lastFrame = t;
-    smoothY = ease(smoothY, localY, dt);
-    if (role === 'host') {
-      hostUpdate(dt);
-      if (roomStatus !== 'playing' || ending) return;
-      if (state && t-lastPublish > 65) {
-        lastPublish = t; state.updatedAt = Date.now();
-        roomRef.child('state').set(state).catch(() => setStatus('Lost connection to room. Check Realtime Database rules.'));
-      }
-    } else if (role === 'guest') publishInput();
-    draw(); raf = requestAnimationFrame(frame);
+    raf=0;if(!isVisible||roomStatus!=='playing'||!roomRef||ending)return;
+    const dt=Math.min(((t-lastFrame)/1000)||0,.035);lastFrame=t;
+    smoothY=ease(smoothY,localY,dt);
+    if(role==='host'){
+      updateHost(dt);
+      if(roomStatus!=='playing'||ending)return;
+      if(state&&t-lastPublish>40){lastPublish=t;state.updatedAt=Date.now();roomRef.child('state').set(state).catch(()=>setStatus('Lost connection to room. Check Realtime Database rules.'));}
+    } else { publishInput(); }
+    draw();raf=requestAnimationFrame(frame);
   }
   function draw() {
-    const c = gameCtx;
-    c.fillStyle='#0c1727'; c.fillRect(0,0,GAME_W,GAME_H); c.strokeStyle='#32dcff44'; c.lineWidth=1;
+    const c=gameCtx;c.fillStyle='#0c1727';c.fillRect(0,0,GAME_W,GAME_H);c.strokeStyle='#32dcff44';c.lineWidth=1;
     for(let y=70;y<GAME_H;y+=65){c.beginPath();c.moveTo(0,y);c.lineTo(GAME_W,y);c.stroke();}
     c.setLineDash([8,12]);c.strokeStyle='#49dfff99';c.lineWidth=3;c.beginPath();c.moveTo(GAME_W/2,0);c.lineTo(GAME_W/2,GAME_H);c.stroke();c.setLineDash([]);
-    const s = state || initialState();
-    c.textAlign='center';c.font='bold 42px system-ui';c.fillStyle='#eefaff';
-    c.fillText(Math.min(TARGET_SCORE, s.hostScore||0), GAME_W/2-60, 55); c.fillText(Math.min(TARGET_SCORE, s.guestScore||0), GAME_W/2+60, 55);
-    const hostY = role === 'host' && roomStatus === 'playing' ? smoothY : s.hostY;
-    const guestY = role === 'guest' && roomStatus === 'playing' ? smoothY : s.guestY;
-    c.shadowBlur=16;c.fillStyle='#32dcff';c.shadowColor=c.fillStyle;c.fillRect(28,clampY(hostY)-PAD_H/2,PW,PAD_H);
+    const s=role==='guest'&&roomStatus==='playing'?interpolateGuest(performance.now()):(state||initialState());
+    if(s.mode==='adventure')for(const [x,y] of [[400,170],[400,330]]){c.beginPath();c.arc(x,y,20,0,Math.PI*2);c.fillStyle='#4af3ff30';c.fill();c.strokeStyle='#4af3ff';c.lineWidth=2;c.stroke();}
+    c.textAlign='center';c.font='bold 42px system-ui';c.fillStyle='#eefaff';c.fillText(Math.min(TARGET_SCORE,s.hostScore||0),GAME_W/2-60,55);c.fillText(Math.min(TARGET_SCORE,s.guestScore||0),GAME_W/2+60,55);
+    const hostH=s.mode==='boss'?PAD_H*1.5:PAD_H;
+    const hostY=role==='host'&&roomStatus==='playing'?smoothY:s.hostY;
+    const guestY=role==='guest'&&roomStatus==='playing'?smoothY:s.guestY;
+    c.shadowBlur=16;c.fillStyle='#32dcff';c.shadowColor=c.fillStyle;c.fillRect(28,clampY(hostY)-hostH/2,PW,hostH);
     c.fillStyle='#ff69c7';c.shadowColor=c.fillStyle;c.fillRect(GAME_W-42,clampY(guestY)-PAD_H/2,PW,PAD_H);
     c.beginPath();c.arc(Number.isFinite(s.ballX)?s.ballX:GAME_W/2,Number.isFinite(s.ballY)?s.ballY:GAME_H/2,BALL_R,0,Math.PI*2);c.fillStyle='white';c.shadowColor='white';c.fill();c.shadowBlur=0;
-    if(roomStatus==='waiting'||roomStatus==='idle'||roomStatus==='finished'){
-      c.fillStyle='#07101dcc';c.fillRect(0,0,GAME_W,GAME_H);c.fillStyle='white';c.font='bold 28px system-ui';
-      c.fillText(roomStatus==='waiting'?'WAITING TO START':roomStatus==='finished'?(s.winner===role?'YOU WIN!':'MATCH OVER'):'CREATE OR JOIN A ROOM',GAME_W/2,GAME_H/2);
-    }
+    if(roomStatus==='waiting'||roomStatus==='idle'||roomStatus==='finished'){c.fillStyle='#07101dcc';c.fillRect(0,0,GAME_W,GAME_H);c.fillStyle='white';c.font='bold 28px system-ui';c.fillText(roomStatus==='waiting'?'WAITING TO START':roomStatus==='finished'?(s.winner===role?'YOU WIN!':'MATCH OVER'):'CREATE OR JOIN A ROOM',GAME_W/2,GAME_H/2);}
   }
-  function setLocalY(event) {
-    const rect=gameCanvas.getBoundingClientRect(); localY=clampY((event.clientY-rect.top)*GAME_H/rect.height); publishInput();
-  }
+  function setLocalY(event) { const rect=gameCanvas.getBoundingClientRect();localY=clampY((event.clientY-rect.top)*GAME_H/rect.height);publishInput(); }
   async function leaveRoom() {
-    const oldRef=roomRef, oldRole=role; stopListeners(); ending=false;
-    try { if(oldRef&&oldRole==='host') await oldRef.remove(); else if(oldRef&&oldRole==='guest') await oldRef.child('guestUid').remove(); }
-    catch(e){console.warn('Room cleanup failed:',e);}
-    resetRoomUi(); setStatus('Create a room and share its code, or enter a friend\'s code.');
+    const oldRef=roomRef,oldRole=role;stopListeners();ending=false;
+    try{if(oldRef&&oldRole==='host')await oldRef.remove();else if(oldRef&&oldRole==='guest')await oldRef.child('guestUid').remove();}catch(e){console.warn('Room cleanup failed:',e);}
+    resetRoomUi();setStatus('Create a room and share its code, or enter a friend\'s code.');
   }
-  $('smoothness').value = String(Math.max(0, Math.min(100, smoothing)));
-  $('smoothValue').textContent = `${$('smoothness').value}%`;
-  $('smoothness').addEventListener('input', e => {
-    smoothing = Number(e.target.value); $('smoothValue').textContent = `${smoothing}%`;
-    try { localStorage.setItem('pongControllerSmoothing', String(smoothing)); } catch {}
-  });
-  entry.querySelector('button').addEventListener('click', enterOverlay);
-  $('onlineCreate').addEventListener('click', createRoom); $('onlineJoin').addEventListener('click', joinRoom); $('onlineStart').addEventListener('click', startMatch);
-  $('onlineCopy').addEventListener('click', async () => { try { await navigator.clipboard.writeText(roomCode); setStatus('Room code copied. Send it to your friend.'); } catch { setStatus(`Share this room code: ${roomCode}`); } });
-  $('onlineExit').addEventListener('click', async () => { isVisible=false; await leaveRoom(); overlay.hidden=true; });
-  gameCanvas.addEventListener('pointerdown', setLocalY);
-  gameCanvas.addEventListener('pointermove', e => { if(e.pointerType!=='mouse'||e.buttons) setLocalY(e); });
-  window.addEventListener('keydown', e => {
-    if(!isVisible)return;
-    if(e.key==='Escape'){overlay.hidden=true;isVisible=false;return;}
-    if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();localY=clampY(localY+(e.key==='ArrowUp'?-24:24));publishInput();}
-  });
+  $('smoothness').value=String(Math.max(0,Math.min(100,smoothing)));$('smoothValue').textContent=`${$('smoothness').value}%`;
+  $('smoothness').addEventListener('input',e=>{smoothing=Number(e.target.value);$('smoothValue').textContent=`${smoothing}%`;try{localStorage.setItem('pongControllerSmoothing',String(smoothing));}catch{}});
+  $('onlineMode').addEventListener('change',()=>{if(role==='host'&&roomStatus==='waiting'&&state){state.mode=$('onlineMode').value;roomRef.child('state/mode').set(state.mode).catch(()=>{});draw();}});
+  entry.querySelector('button').addEventListener('click',enterOverlay);
+  $('onlineCreate').addEventListener('click',createRoom);$('onlineJoin').addEventListener('click',joinRoom);
+  $('onlineStart').addEventListener('click',()=>startMatch());$('onlineRematch').addEventListener('click',()=>startMatch());$('onlineChangeMode').addEventListener('click',changeMode);
+  $('onlineCopy').addEventListener('click',async()=>{try{await navigator.clipboard.writeText(roomCode);setStatus('Room code copied. Send it to your friend.');}catch{setStatus(`Share this room code: ${roomCode}`);}});
+  $('onlineExit').addEventListener('click',async()=>{isVisible=false;await leaveRoom();overlay.hidden=true;});
+  gameCanvas.addEventListener('pointerdown',setLocalY);gameCanvas.addEventListener('pointermove',e=>{if(e.pointerType!=='mouse'||e.buttons)setLocalY(e);});
+  window.addEventListener('keydown',e=>{if(!isVisible)return;if(e.key==='Escape'){overlay.hidden=true;isVisible=false;return;}if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();localY=clampY(localY+(e.key==='ArrowUp'?-24:24));publishInput();}});
   document.addEventListener('visibilitychange',()=>{if(document.hidden){cancelAnimationFrame(raf);raf=0;}else startGameLoop();});
-  window.addEventListener('beforeunload',stopListeners);
-  draw();
+  window.addEventListener('beforeunload',stopListeners);draw();
 })();
