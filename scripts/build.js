@@ -19,7 +19,6 @@ for (const file of [gameFile, firebaseConfigFile, ...assets.map(asset => asset.s
 fs.mkdirSync(path.join(outputDir, 'scripts'), { recursive: true });
 let html = fs.readFileSync(gameFile, 'utf8');
 if (!html.includes('</body>')) throw new Error('Could not find </body> in game HTML');
-// Replace old injected asset tags so every build contains exactly the current scripts.
 html = html.replace(/\s*<script\b[^>]*\bsrc=["'][^"']*(?:firebase-config\.js|scripts\/(?:multiplayer|controller-smoothing|countdown)\.js)[^"']*["'][^>]*>\s*<\/script>/gi, '\n');
 const version = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 const tags = [
@@ -37,13 +36,12 @@ for (const asset of assets) {
   fs.copyFileSync(asset.source, destination);
 }
 
-// Give the joining client a short prediction window between Firebase snapshots instead
-// of freezing the ball at the last received position. Use a modest render buffer to
-// interpolate snapshots, then extrapolate the ball for at most 120 ms.
+// Normalize Windows CRLF files before matching so the build patch works on PowerShell
+// checkouts configured with core.autocrlf.
 const multiplayerAsset = assets.find(asset => asset.output === 'scripts/multiplayer.js');
-let multiplayer = fs.readFileSync(multiplayerAsset.source, 'utf8');
-const oldInterpolation = /  function interpolateGuest\(now\) \{[\s\S]*?\n  \}\n  function frame\(t\) \{/;
-const smoothInterpolation = `  function interpolateGuest(now) {
+let multiplayer = fs.readFileSync(multiplayerAsset.source, 'utf8').replace(/\r\n?/g, '\n');
+const oldInterpolation = /function interpolateGuest\(now\)\s*\{[\s\S]*?\n\s*\}\s*\n\s*function frame\(t\)\s*\{/;
+const smoothInterpolation = `function interpolateGuest(now) {
     if (!state || !previousGuestState || !previousGuestReceivedAt || guestStateReceivedAt <= previousGuestReceivedAt) return state;
     const targetTime = now - 60;
     const rawAlpha = (targetTime - previousGuestReceivedAt) / (guestStateReceivedAt - previousGuestReceivedAt);
@@ -52,8 +50,6 @@ const smoothInterpolation = `  function interpolateGuest(now) {
     for (const key of ['ballX','ballY','hostY','guestY']) {
       view[key] = previousGuestState[key] + (state[key] - previousGuestState[key]) * alpha;
     }
-    // Predict only the ball a little beyond the newest snapshot; keep paddle and score
-    // values tied to confirmed server data to avoid rubber-banding or speculative points.
     const ahead = Math.max(0, Math.min(.12, (targetTime - guestStateReceivedAt) / 1000));
     if (ahead > 0 && roomStatus === 'playing') {
       view.ballX = state.ballX + state.ballVX * ahead;
@@ -65,20 +61,27 @@ const smoothInterpolation = `  function interpolateGuest(now) {
     return view;
   }
   function frame(t) {`;
-if (!oldInterpolation.test(multiplayer)) throw new Error('Could not patch multiplayer interpolation; source changed unexpectedly.');
+if (!oldInterpolation.test(multiplayer)) {
+  throw new Error('Could not find interpolateGuest() in scripts/multiplayer.js; build stopped without deploying.');
+}
 multiplayer = multiplayer.replace(oldInterpolation, smoothInterpolation);
 multiplayer = multiplayer.replaceAll('t-lastPublish>40', 't-lastPublish>50');
 multiplayer = multiplayer.replace('now - lastInputWrite < 25', 'now - lastInputWrite < 40');
-multiplayer = multiplayer.replace("state.serve=.7;", "state.serve=3;");
-multiplayer = multiplayer.replace("serve: .65", "serve: 3");
+multiplayer = multiplayer.replace('state.serve=.7;', 'state.serve=3;');
+multiplayer = multiplayer.replace('serve: .65', 'serve: 3');
 const countdownDrawAnchor = "    if(roomStatus==='waiting'||roomStatus==='idle'||roomStatus==='finished'){";
-if (!multiplayer.includes(countdownDrawAnchor)) throw new Error('Could not locate multiplayer court overlay for countdown.');
+if (!multiplayer.includes(countdownDrawAnchor)) {
+  throw new Error('Could not locate multiplayer court overlay for countdown; build stopped without deploying.');
+}
 multiplayer = multiplayer.replace(countdownDrawAnchor, `    if(roomStatus==='playing' && Number(s.serve)>0){c.fillStyle='#07101d99';c.fillRect(0,0,GAME_W,GAME_H);c.textAlign='center';c.fillStyle='white';c.font='900 96px system-ui';c.shadowColor='#32dcff';c.shadowBlur=24;c.fillText(String(Math.max(1,Math.ceil(s.serve))),GAME_W/2,GAME_H/2+30);c.shadowBlur=0;}
 ${countdownDrawAnchor}`);
+
 const builtHtml = fs.readFileSync(path.join(outputDir, 'index.html'), 'utf8');
 for (const required of ['controller-smoothing.js?v=', 'countdown.js?v=', 'multiplayer.js?v=']) {
-  if (!builtHtml.includes(required)) throw new Error(`Build output is missing ${required}`);
+  if (!builtHtml.includes(required)) throw new Error(`Build output is missing ${required}; build stopped.`);
 }
-if (!multiplayer.includes('const targetTime = now - 60;') || !multiplayer.includes('state.serve=3;')) throw new Error('Multiplayer responsiveness/countdown patch verification failed.');
+if (!multiplayer.includes('const targetTime = now - 60;') || !multiplayer.includes('state.serve=3;')) {
+  throw new Error('Multiplayer interpolation/countdown verification failed; build stopped.');
+}
 fs.writeFileSync(path.join(outputDir, 'scripts', 'multiplayer.js'), multiplayer);
 console.log(`Built game with controller smoothing, start countdown, and multiplayer interpolation (asset version ${version}).`);
