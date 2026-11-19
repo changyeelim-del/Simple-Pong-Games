@@ -17,7 +17,7 @@
     .game-modal .panel { display:block!important; margin:0; }
     .game-modal .shop { background:transparent; }
     #openPaddleShop { margin:0; }
-    #onlineEntry { display:inline-block; margin:0; }
+    #onlineEntry { display:inline-block!important; margin:0; }
     #onlineEntry button { border:0; border-radius:6px; padding:9px 11px; font:inherit; background:#45d9ff; color:#07121e; font-weight:700; cursor:pointer; }
     @media(max-width:520px) { .game-modal-content { padding:12px; } .game-modal-header { top:-12px; margin:-12px -12px 10px; padding:10px 12px; } }
   `;
@@ -43,7 +43,9 @@
     content.append(header, panel);
     dialog.append(content);
     document.body.append(dialog);
-    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
+    dialog.addEventListener('click', event => {
+      if (event.target === dialog) dialog.close();
+    });
     return dialog;
   }
 
@@ -75,16 +77,15 @@
         lastMode = modeSelect.value;
         return;
       }
+      // Do not let the single-player game treat multiplayer as a CPU mode.
       event.stopImmediatePropagation();
       modeSelect.value = lastMode;
-      const onlineButton = document.querySelector('#onlineEntry button');
-      if (onlineButton) onlineButton.click();
-      else window.setTimeout(() => document.querySelector('#onlineEntry button')?.click(), 0);
+      const launcher = document.querySelector('#onlineEntry button');
+      if (launcher) launcher.click();
+      else document.dispatchEvent(new CustomEvent('pong:open-multiplayer'));
     }, true);
   }
 
-  // multiplayer.js creates its entry after this script runs. Keep its launcher visible
-  // and alongside the mode controls as a reliable fallback to the selector option.
   function placeOnlineLauncher() {
     const entry = document.getElementById('onlineEntry');
     if (!entry) return false;
