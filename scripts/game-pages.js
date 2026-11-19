@@ -72,17 +72,23 @@
       modeSelect.add(new Option('Online Multiplayer', 'multiplayer'));
     }
     let lastMode = modeSelect.value === 'multiplayer' ? 'adventure' : modeSelect.value;
+
+    // Capture the change before the game's original bubble listener. Otherwise its
+    // handler treats 'multiplayer' as a single-player mode and resets the game first.
     modeSelect.addEventListener('change', event => {
       if (modeSelect.value !== 'multiplayer') {
         lastMode = modeSelect.value;
         return;
       }
-      // Do not let the single-player game treat multiplayer as a CPU mode.
+      event.preventDefault();
       event.stopImmediatePropagation();
       modeSelect.value = lastMode;
-      const launcher = document.querySelector('#onlineEntry button');
-      if (launcher) launcher.click();
-      else document.dispatchEvent(new CustomEvent('pong:open-multiplayer'));
+      const openOnline = () => {
+        const launcher = document.querySelector('#onlineEntry button');
+        if (launcher) launcher.click();
+        else window.setTimeout(openOnline, 50);
+      };
+      openOnline();
     }, true);
   }
 
