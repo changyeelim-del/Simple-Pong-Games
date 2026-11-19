@@ -43,52 +43,31 @@
     content.append(header, panel);
     dialog.append(content);
     document.body.append(dialog);
-    dialog.addEventListener('click', event => {
-      if (event.target === dialog) dialog.close();
-    });
+    dialog.addEventListener('click', event => { if (event.target === dialog) dialog.close(); });
     return dialog;
   }
 
   const settingsDialog = createDialog('settingsDialog', '⚙ Settings', settingsPanel);
   const shopDialog = createDialog('shopDialog', '🪙 Paddle Shop', shopPanel);
-  const settingsButton = document.getElementById('settingsButton');
-  settingsButton?.addEventListener('click', event => {
-    event.preventDefault();
-    event.stopImmediatePropagation();
+  document.getElementById('settingsButton')?.addEventListener('click', event => {
+    event.preventDefault(); event.stopImmediatePropagation();
     if (settingsDialog && !settingsDialog.open) settingsDialog.showModal();
   }, true);
 
   const shopButton = document.createElement('button');
-  shopButton.id = 'openPaddleShop';
-  shopButton.type = 'button';
-  shopButton.textContent = '🪙 Shop';
+  shopButton.id = 'openPaddleShop'; shopButton.type = 'button'; shopButton.textContent = '🪙 Shop';
   controls.append(shopButton);
-  shopButton.addEventListener('click', () => {
-    if (shopDialog && !shopDialog.open) shopDialog.showModal();
-  });
+  shopButton.addEventListener('click', () => { if (shopDialog && !shopDialog.open) shopDialog.showModal(); });
 
   if (modeSelect) {
-    if (!Array.from(modeSelect.options).some(option => option.value === 'multiplayer')) {
-      modeSelect.add(new Option('Online Multiplayer', 'multiplayer'));
-    }
+    if (!Array.from(modeSelect.options).some(option => option.value === 'multiplayer')) modeSelect.add(new Option('Online Multiplayer', 'multiplayer'));
     let lastMode = modeSelect.value === 'multiplayer' ? 'adventure' : modeSelect.value;
-
-    // Capture the change before the game's original bubble listener. Otherwise its
-    // handler treats 'multiplayer' as a single-player mode and resets the game first.
     modeSelect.addEventListener('change', event => {
-      if (modeSelect.value !== 'multiplayer') {
-        lastMode = modeSelect.value;
-        return;
-      }
-      event.preventDefault();
-      event.stopImmediatePropagation();
+      if (modeSelect.value !== 'multiplayer') { lastMode = modeSelect.value; return; }
+      event.preventDefault(); event.stopImmediatePropagation();
       modeSelect.value = lastMode;
-      const openOnline = () => {
-        const launcher = document.querySelector('#onlineEntry button');
-        if (launcher) launcher.click();
-        else window.setTimeout(openOnline, 50);
-      };
-      openOnline();
+      // Direct event avoids depending on a hidden/delayed launcher button click.
+      document.dispatchEvent(new CustomEvent('pong:open-multiplayer'));
     }, true);
   }
 
@@ -99,9 +78,7 @@
     return true;
   }
   if (!placeOnlineLauncher()) {
-    const observer = new MutationObserver(() => {
-      if (placeOnlineLauncher()) observer.disconnect();
-    });
+    const observer = new MutationObserver(() => { if (placeOnlineLauncher()) observer.disconnect(); });
     observer.observe(document.body, { childList: true, subtree: true });
   }
 
