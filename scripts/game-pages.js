@@ -17,7 +17,8 @@
     .game-modal .panel { display:block!important; margin:0; }
     .game-modal .shop { background:transparent; }
     #openPaddleShop { margin:0; }
-    #onlineEntry { display:none!important; }
+    #onlineEntry { display:inline-block; margin:0; }
+    #onlineEntry button { border:0; border-radius:6px; padding:9px 11px; font:inherit; background:#45d9ff; color:#07121e; font-weight:700; cursor:pointer; }
     @media(max-width:520px) { .game-modal-content { padding:12px; } .game-modal-header { top:-12px; margin:-12px -12px 10px; padding:10px 12px; } }
   `;
   document.head.append(style);
@@ -50,7 +51,8 @@
   const shopDialog = createDialog('shopDialog', '🪙 Paddle Shop', shopPanel);
   const settingsButton = document.getElementById('settingsButton');
   settingsButton?.addEventListener('click', event => {
-    event.preventDefault(); event.stopImmediatePropagation();
+    event.preventDefault();
+    event.stopImmediatePropagation();
     if (settingsDialog && !settingsDialog.open) settingsDialog.showModal();
   }, true);
 
@@ -64,17 +66,36 @@
   });
 
   if (modeSelect) {
-    const onlineOption = Array.from(modeSelect.options).find(option => option.value === 'multiplayer');
-    if (!onlineOption) modeSelect.add(new Option('Online Multiplayer', 'multiplayer'));
+    if (!Array.from(modeSelect.options).some(option => option.value === 'multiplayer')) {
+      modeSelect.add(new Option('Online Multiplayer', 'multiplayer'));
+    }
     let lastMode = modeSelect.value === 'multiplayer' ? 'adventure' : modeSelect.value;
     modeSelect.addEventListener('change', event => {
-      if (modeSelect.value !== 'multiplayer') { lastMode = modeSelect.value; return; }
+      if (modeSelect.value !== 'multiplayer') {
+        lastMode = modeSelect.value;
+        return;
+      }
       event.stopImmediatePropagation();
       modeSelect.value = lastMode;
       const onlineButton = document.querySelector('#onlineEntry button');
       if (onlineButton) onlineButton.click();
       else window.setTimeout(() => document.querySelector('#onlineEntry button')?.click(), 0);
     }, true);
+  }
+
+  // multiplayer.js creates its entry after this script runs. Keep its launcher visible
+  // and alongside the mode controls as a reliable fallback to the selector option.
+  function placeOnlineLauncher() {
+    const entry = document.getElementById('onlineEntry');
+    if (!entry) return false;
+    controls.append(entry);
+    return true;
+  }
+  if (!placeOnlineLauncher()) {
+    const observer = new MutationObserver(() => {
+      if (placeOnlineLauncher()) observer.disconnect();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
   }
 
   document.addEventListener('keydown', event => {
